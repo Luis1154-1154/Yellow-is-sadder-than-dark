@@ -81,6 +81,7 @@ func _build_ui() -> void:
 	continue_label.add_theme_font_size_override("font_size", 42)
 	continue_label.add_theme_color_override("font_color", ACCENT_COLOR)
 	continue_label.text = "ENTER / SPACE"
+	continue_label.visible = false
 	add_child(continue_label)
 
 	typewriter_player = AudioStreamPlayer.new()
@@ -198,6 +199,7 @@ func _show_entry() -> void:
 		_show_ending()
 		return
 	current_entry = entries[entry_index]
+	continue_label.visible = false
 	if current_entry.get("black", false):
 		background.texture = null
 		black_background.visible = true
