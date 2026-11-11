@@ -9,6 +9,9 @@ const DIALOGUE_PANEL_SIZE := Vector2(1600.0, 280.0)
 const DIALOGUE_TEXT_SIZE := Vector2(1480.0, 230.0)
 const FREDOKA_FONT = preload("res://fonts/Fredoka-Regular.ttf")
 const ROCK_SALT_FONT = preload("res://fonts/RockSalt-Regular.ttf")
+const NORMAL_DIALOGUE_STREAM = preload("res://assets/sounds/Soft_pencil_tap_on_n_#1-1794378651940.mp3")
+const BREATHING_STREAM = preload("res://assets/sounds/breathing1.mp3")
+const HEARTBEAT_STREAM = preload("res://assets/sounds/Hbeating1.mp3")
 
 var background: TextureRect
 var black_background: ColorRect
@@ -17,9 +20,11 @@ var dialogue_label: Label
 var continue_label: Label
 var typewriter_player: AudioStreamPlayer
 var ambience_player: AudioStreamPlayer
-var click_stream: AudioStreamWAV
-var breath_stream: AudioStreamWAV
-var heartbeat_stream: AudioStreamWAV
+var mind_breath_player: AudioStreamPlayer
+var mind_heartbeat_player: AudioStreamPlayer
+var typewriter_stream: AudioStream
+var breath_stream: AudioStream
+var heartbeat_stream: AudioStream
 
 var entries: Array[Dictionary] = []
 var entry_index := 0
@@ -85,9 +90,16 @@ func _build_ui() -> void:
 	add_child(continue_label)
 
 	typewriter_player = AudioStreamPlayer.new()
+	typewriter_player.pitch_scale = 1.0
+	typewriter_player.volume_db = 0.0
 	add_child(typewriter_player)
 	ambience_player = AudioStreamPlayer.new()
 	add_child(ambience_player)
+	mind_breath_player = AudioStreamPlayer.new()
+	add_child(mind_breath_player)
+	mind_heartbeat_player = AudioStreamPlayer.new()
+	mind_heartbeat_player.pitch_scale = 2.0
+	add_child(mind_heartbeat_player)
 
 func _build_script() -> void:
 	entries = [
@@ -138,13 +150,13 @@ func _build_script() -> void:
 		{"black": true, "text": "*I know that not everything is my fault, but I can't help thinking this way.*", "instant": false, "kind": "narration"},
 		{"black": true, "text": "*Everything hurts.*", "instant": false, "kind": "narration"},
 		{"black": true, "text": "*I wanna cry but I can't.*", "instant": false, "kind": "narration"},
-		{"image": "scene10.png", "text": "*They can't notice you.*", "instant": false, "kind": "narration"},
+		{"image": "scene10.png", "text": "*They can't notice you.*", "instant": false, "kind": "narration", "ambience": "heartbeat"},
 		{"image": "scene10.png", "text": "*But I can't stop being ridiculously tense, anyways.*", "instant": false, "kind": "narration", "ambience": "heartbeat"},
-		{"image": "scene10.png", "text": "*Oh no, no, no... somebody's approaching me.*", "instant": false, "kind": "narration"},
+		{"image": "scene10.png", "text": "*Oh no, no, no... somebody's approaching me.*", "instant": false, "kind": "narration", "ambience": "heartbeat"},
 		{"image": "scene10.png", "text": "*What if I mess it up like I messed up other relationships?*", "instant": true, "kind": "mind"},
 		{"image": "scene10.png", "text": "*Where can I turn my head to accomplish both: not looking like I'm ignoring her, and not looking at her while she's coming over?*", "instant": true, "kind": "mind"},
 		{"image": "scene10.png", "text": "*Your face looks like you hate her. You try to fix it, but it isn't enough.*", "instant": true, "kind": "mind"},
-		{"image": "scene11.png", "text": "Hiiii!", "instant": false, "kind": "spoken"}
+		{"image": "scene11.png", "text": "Hiiii!", "instant": false, "kind": "spoken", "ambience": "heartbeat"}
 	]
 
 func _split_long_dialogues() -> void:
@@ -226,20 +238,27 @@ func _show_entry() -> void:
 
 func _type_words(token: int) -> void:
 	var delay := float(current_entry.get("slow", 0.045))
+	var plays_typewriter := str(current_entry.get("kind", "")) != "mind"
+	var sound_step := 2 if current_words.size() >= 3 else 1
 	while displayed_words < current_words.size() and token == typing_token:
 		var word := current_words[displayed_words]
 		dialogue_label.text += ("" if displayed_words == 0 else " ") + word
+		if plays_typewriter and displayed_words % sound_step == 0:
+			typewriter_player.stop()
+			typewriter_player.stream = typewriter_stream
+			typewriter_player.play()
 		displayed_words += 1
-		typewriter_player.stream = click_stream
-		typewriter_player.play()
 		await get_tree().create_timer(delay).timeout
 	if token == typing_token:
+		if plays_typewriter:
+			typewriter_player.stop()
 		is_typing = false
 		waiting_for_input = true
 
 func _advance() -> void:
 	if is_typing:
 		typing_token += 1
+		typewriter_player.stop()
 		dialogue_label.text = current_entry.text
 		is_typing = false
 		waiting_for_input = true
@@ -326,9 +345,32 @@ func _make_panel_style(color: Color) -> StyleBoxFlat:
 	return style
 
 func _build_audio() -> void:
-	click_stream = _make_tone(0.035, 1500.0, 0.18, false)
-	breath_stream = _make_tone(1.6, 160.0, 0.12, true)
-	heartbeat_stream = _make_heartbeat()
+	typewriter_stream = NORMAL_DIALOGUE_STREAM
+	breath_stream = BREATHING_STREAM
+	heartbeat_stream = HEARTBEAT_STREAM
+	var heartbeat_mp3 := heartbeat_stream as AudioStreamMP3
+	if heartbeat_mp3:
+		heartbeat_mp3.loop = true
+
+func _make_key_sound() -> AudioStreamWAV:
+	var rate := 22050
+	var duration := 0.075
+	var samples := int(duration * rate)
+	var data := PackedByteArray()
+	for i in samples:
+		var progress := float(i) / float(samples)
+		var envelope := pow(1.0 - progress, 3.2)
+		var tone := sin(TAU * 880.0 * float(i) / rate) * 0.7
+		tone += sin(TAU * 1320.0 * float(i) / rate) * 0.3
+		var value := int(clamp(tone * envelope * 0.16, -1.0, 1.0) * 32767.0)
+		data.append(value & 0xff)
+		data.append((value >> 8) & 0xff)
+	var stream := AudioStreamWAV.new()
+	stream.format = AudioStreamWAV.FORMAT_16_BITS
+	stream.mix_rate = rate
+	stream.stereo = false
+	stream.data = data
+	return stream
 
 func _make_tone(duration: float, frequency: float, volume: float, looping: bool) -> AudioStreamWAV:
 	var rate := 22050
@@ -355,17 +397,25 @@ func _make_heartbeat() -> AudioStreamWAV:
 	return stream
 
 func _update_ambience() -> void:
-	var ambience: String = str(current_entry.get("ambience", ""))
-	if ambience in ["breath", "breath_heart", "cry"]:
-		ambience_player.stream = breath_stream
-		ambience_player.volume_db = -12.0
-		ambience_player.play()
-	elif ambience == "heartbeat":
-		ambience_player.stream = heartbeat_stream
-		ambience_player.volume_db = -9.0
-		ambience_player.play()
+	var image_name: String = str(current_entry.get("image", ""))
+	var is_mind: bool = current_entry.get("kind", "") == "mind"
+	if is_mind:
+		ambience_player.stop()
+		if not mind_heartbeat_player.playing:
+			mind_heartbeat_player.stream = heartbeat_stream
+			mind_heartbeat_player.volume_db = 0.0
+			mind_heartbeat_player.play(0.0)
+	elif image_name in ["scene10.png", "scene11.png"]:
+		mind_heartbeat_player.stop()
+		if ambience_player.stream != breath_stream or not ambience_player.playing:
+			ambience_player.stop()
+			ambience_player.stream = breath_stream
+			ambience_player.volume_db = -3.0
+			ambience_player.play()
 	else:
 		ambience_player.stop()
+		mind_heartbeat_player.stop()
+	mind_breath_player.stop()
 
 func _show_ending() -> void:
 	background.texture = null
