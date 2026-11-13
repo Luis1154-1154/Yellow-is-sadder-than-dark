@@ -12,6 +12,15 @@ const ROCK_SALT_FONT = preload("res://fonts/RockSalt-Regular.ttf")
 const NORMAL_DIALOGUE_STREAM = preload("res://assets/sounds/Soft_pencil_tap_on_n_#1-1794378651940.mp3")
 const BREATHING_STREAM = preload("res://assets/sounds/breathing1.mp3")
 const HEARTBEAT_STREAM = preload("res://assets/sounds/Hbeating1.mp3")
+const FOCUS_EFFORT_STREAM = preload("res://assets/sounds/audioJuego1.mp3")
+const FOCUS_SUCCESS_STREAM = preload("res://assets/sounds/mixingGame1.mp3")
+const FOCUS_EFFORT_MAX := 100.0
+const FOCUS_EFFORT_RATE := 18.0
+const FOCUS_EFFORT_DECAY := 60.0
+const FOCUS_WINDOW_TIME := 2.35
+const FOCUS_FAKEOUT_TIME := 0.07
+const FOCUS_RESOLUTION_TIME := 5.5
+const FOCUS_CLIMAX_BLUR := 8.5
 
 var background: TextureRect
 var black_background: ColorRect
@@ -22,9 +31,13 @@ var typewriter_player: AudioStreamPlayer
 var ambience_player: AudioStreamPlayer
 var mind_breath_player: AudioStreamPlayer
 var mind_heartbeat_player: AudioStreamPlayer
+var sonido_esfuerzo: AudioStreamPlayer
+var sonido_corte: AudioStreamPlayer
 var typewriter_stream: AudioStream
 var breath_stream: AudioStream
 var heartbeat_stream: AudioStream
+var effort_stream: AudioStream
+var cut_stream: AudioStream
 
 var entries: Array[Dictionary] = []
 var entry_index := 0
@@ -34,6 +47,23 @@ var displayed_words := 0
 var current_words: PackedStringArray
 var current_entry: Dictionary
 var waiting_for_input := false
+var vn_focus_mode := false
+var vn_focus_intro := true
+enum FocusState { EFFORT, WINDOW, RESOLUTION }
+var focus_state := FocusState.EFFORT
+var focus_effort := 0.0
+var focus_window_timer := 0.0
+var focus_image: TextureRect
+var focus_shader_material: ShaderMaterial
+var focus_instructions: RichTextLabel
+var focus_vignette: ColorRect
+var focus_status: Label
+var focus_hint: Label
+var focus_fakeout_timer := 0.0
+var focus_fakeout_armed := true
+var focus_exit_prompt := false
+var mixing_game_active := false
+var mixing_loop_start := 0.5
 
 func _ready() -> void:
 	_build_audio()
@@ -41,6 +71,43 @@ func _ready() -> void:
 	_build_script()
 	_split_long_dialogues()
 	_show_entry()
+
+func _process(delta: float) -> void:
+	if mixing_game_active:
+		_maintain_mixing_game_loop()
+	if not vn_focus_mode or vn_focus_intro:
+		return
+	var is_pressing := Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_S)
+	_update_focus_music(is_pressing)
+	if focus_fakeout_timer > 0.0:
+		if not is_pressing:
+			focus_effort = 0.0
+		focus_fakeout_timer -= delta
+		if focus_fakeout_timer <= 0.0 or not is_pressing:
+			focus_image.texture = load("res://scenes/scene12.png")
+			focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+			focus_fakeout_timer = 0.0
+		return
+	match focus_state:
+		FocusState.EFFORT:
+			if is_pressing:
+				focus_effort = min(focus_effort + FOCUS_EFFORT_RATE * delta, FOCUS_EFFORT_MAX)
+			else:
+				focus_effort = max(focus_effort - FOCUS_EFFORT_DECAY * delta, 0.0)
+			_apply_focus_tension()
+			if focus_effort < 70.0:
+				focus_fakeout_armed = true
+			elif focus_effort >= 80.0 and focus_fakeout_armed:
+				_begin_focus_fakeout()
+			if focus_effort >= FOCUS_EFFORT_MAX:
+				_begin_focus_window()
+		FocusState.WINDOW:
+			if not is_pressing:
+				_complete_focus()
+				return
+			focus_window_timer -= delta
+			if focus_window_timer <= 0.0:
+				_reset_focus_cycle()
 
 func _build_ui() -> void:
 	background = TextureRect.new()
@@ -61,6 +128,7 @@ func _build_ui() -> void:
 	dialogue_panel = Panel.new()
 	dialogue_panel.position = Vector2(820, 1580)
 	dialogue_panel.size = DIALOGUE_PANEL_SIZE
+	dialogue_panel.z_index = 10
 	dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(PANEL_COLOR))
 	add_child(dialogue_panel)
 
@@ -83,11 +151,103 @@ func _build_ui() -> void:
 	continue_label.position = Vector2(0, 2020)
 	continue_label.size = Vector2(3840, 70)
 	continue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	continue_label.z_index = 11
 	continue_label.add_theme_font_size_override("font_size", 42)
 	continue_label.add_theme_color_override("font_color", ACCENT_COLOR)
 	continue_label.text = "ENTER / SPACE"
 	continue_label.visible = false
 	add_child(continue_label)
+
+	focus_image = TextureRect.new()
+	focus_image.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	focus_image.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	focus_image.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	focus_image.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	focus_image.z_index = 1
+	focus_image.pivot_offset = BASE_SIZE / 2.0
+	focus_image.visible = false
+	var focus_shader := Shader.new()
+	focus_shader.code = """
+shader_type canvas_item;
+
+uniform float blur_amount = 0.0;
+
+void fragment() {
+	vec2 offset = TEXTURE_PIXEL_SIZE * blur_amount;
+	vec4 color = texture(TEXTURE, UV) * 0.2;
+	color += texture(TEXTURE, UV + vec2(offset.x, 0.0)) * 0.2;
+	color += texture(TEXTURE, UV - vec2(offset.x, 0.0)) * 0.2;
+	color += texture(TEXTURE, UV + vec2(0.0, offset.y)) * 0.2;
+	color += texture(TEXTURE, UV - vec2(0.0, offset.y)) * 0.2;
+	COLOR = color;
+}
+"""
+	focus_shader_material = ShaderMaterial.new()
+	focus_shader_material.shader = focus_shader
+	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+	focus_image.material = focus_shader_material
+	add_child(focus_image)
+
+	focus_vignette = ColorRect.new()
+	focus_vignette.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	focus_vignette.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	focus_vignette.z_index = 2
+	var vignette_shader := Shader.new()
+	vignette_shader.code = """
+shader_type canvas_item;
+
+uniform float vignette_alpha = 0.0;
+
+void fragment() {
+	vec2 centered = UV - vec2(0.5);
+	float edge = smoothstep(0.24, 0.72, length(centered));
+	COLOR = vec4(0.0, 0.0, 0.0, edge * vignette_alpha);
+}
+"""
+	var vignette_material := ShaderMaterial.new()
+	vignette_material.shader = vignette_shader
+	vignette_material.set_shader_parameter("vignette_alpha", 0.0)
+	focus_vignette.material = vignette_material
+	focus_vignette.visible = false
+	add_child(focus_vignette)
+
+	focus_instructions = RichTextLabel.new()
+	focus_instructions.position = Vector2(60, 25)
+	focus_instructions.size = DIALOGUE_TEXT_SIZE
+	focus_instructions.bbcode_enabled = true
+	focus_instructions.fit_content = false
+	focus_instructions.scroll_active = false
+	focus_instructions.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	focus_instructions.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	focus_instructions.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	focus_instructions.add_theme_font_size_override("normal_font_size", 54)
+	focus_instructions.add_theme_font_override("normal_font", FREDOKA_FONT)
+	focus_instructions.add_theme_color_override("default_color", Color("#000000"))
+	focus_instructions.visible = false
+	dialogue_panel.add_child(focus_instructions)
+
+	focus_status = Label.new()
+	focus_status.position = Vector2(150, 150)
+	focus_status.size = Vector2(700, 80)
+	focus_status.add_theme_font_size_override("font_size", 48)
+	focus_status.add_theme_color_override("font_color", TEXT_COLOR)
+	focus_status.add_theme_color_override("font_shadow_color", Color("#000000cc"))
+	focus_status.add_theme_constant_override("shadow_offset_x", 4)
+	focus_status.add_theme_constant_override("shadow_offset_y", 4)
+	focus_status.visible = false
+	add_child(focus_status)
+
+	focus_hint = Label.new()
+	focus_hint.position = Vector2(650, 1910)
+	focus_hint.size = Vector2(2540, 100)
+	focus_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	focus_hint.add_theme_font_size_override("font_size", 42)
+	focus_hint.add_theme_color_override("font_color", TEXT_COLOR)
+	focus_hint.add_theme_color_override("font_shadow_color", Color("#000000cc"))
+	focus_hint.add_theme_constant_override("shadow_offset_x", 4)
+	focus_hint.add_theme_constant_override("shadow_offset_y", 4)
+	focus_hint.visible = false
+	add_child(focus_hint)
 
 	typewriter_player = AudioStreamPlayer.new()
 	typewriter_player.pitch_scale = 1.0
@@ -100,6 +260,10 @@ func _build_ui() -> void:
 	mind_heartbeat_player = AudioStreamPlayer.new()
 	mind_heartbeat_player.pitch_scale = 2.0
 	add_child(mind_heartbeat_player)
+	sonido_esfuerzo = AudioStreamPlayer.new()
+	add_child(sonido_esfuerzo)
+	sonido_corte = AudioStreamPlayer.new()
+	add_child(sonido_corte)
 
 func _build_script() -> void:
 	entries = [
@@ -156,13 +320,31 @@ func _build_script() -> void:
 		{"image": "scene10.png", "text": "*What if I mess it up like I messed up other relationships?*", "instant": true, "kind": "mind"},
 		{"image": "scene10.png", "text": "*Where can I turn my head to accomplish both: not looking like I'm ignoring her, and not looking at her while she's coming over?*", "instant": true, "kind": "mind"},
 		{"image": "scene10.png", "text": "*Your face looks like you hate her. You try to fix it, but it isn't enough.*", "instant": true, "kind": "mind"},
-		{"image": "scene11.png", "text": "Hiiii!", "instant": false, "kind": "spoken", "ambience": "heartbeat"}
+		{"image": "scene11.png", "text": "Hiiii!", "instant": false, "kind": "spoken", "ambience": "heartbeat"},
+		{"image": "scene12.png", "text": "*This girl's so pretty...I like her. If I look ugly, I'll feel way less pressure around her, 'cause I won't be liked by her, so my OCD won't have the chance to betray me and fuck this relationship up.*", "instant": false, "kind": "narration"},
+		{"focus": true, "text": "", "instant": true, "kind": "narration"},
+		{"image": "scene11.png", "text": "Umm, hi.", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
+		{"image": "scene11.png", "text": "You looked so concerned. Is everything okay?", "instant": false, "kind": "spoken", "speaker": "xcarlet", "sequence": true},
+		{"image": "scene11.png", "text": "*Oh no, she actually cares about me. What if I disappoint her? What if I look ungrateful? What if I act rude and she ends up throwing me away like the others.....realizing over time that I'm even worse than at first, and it's not just embarrassment...*", "instant": false, "kind": "narration", "speaker": "jammy", "sequence": true},
+		{"image": "scene11.png", "text": "Umm, yeah, LMAO!", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
+		{"image": "scene11.png", "text": "*LMAO? You looked so ridiculous. Always being such a weirdo.*", "instant": true, "kind": "mind", "speaker": "jammy", "mixing": "start", "sequence": true},
+		{"image": "scene11.png", "text": "*Remember, you're not comfortable touching those cringe notes. I don't wanna give in to a compulsion.....just remember it makes you anxious, and it won't happen again.*", "instant": true, "kind": "narration", "speaker": "jammy", "mixing": "keep", "sequence": true},
+		{"image": "scene11.png", "text": "Well, I'm glad to meet you! My name's Xcarlet, what's your name?", "instant": false, "kind": "spoken", "speaker": "xcarlet", "mixing": "stop", "sequence": true},
+		{"image": "scene11.png", "text": "I'm Jammy.", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
+		{"image": "scene11.png", "text": "Animation?", "instant": false, "kind": "spoken", "speaker": "xcarlet", "sequence": true},
+		{"image": "scene11.png", "text": "Yeah, I guess we'll be in the same class.", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
+		{"image": "scene11.png", "text": "Then let's head to our classroom!", "instant": false, "kind": "spoken", "speaker": "xcarlet", "sequence": true},
+		{"image": "scene11.png", "text": "*To be honest, I'm doing pretty well.*", "instant": false, "kind": "narration", "speaker": "jammy", "sequence": true},
+		{"image": "scene11.png", "text": "*But what if I mess it up by reminding you that you're still you? You were just on autopilot, and from now on you won't be.....realizing you have years ahead to keep up this act, and at this very moment she could notice something and suddenly be scared of you.*", "instant": true, "kind": "mind", "speaker": "jammy", "mixing": "start", "mixing_start": 5.0, "sequence": true}
 	]
 
 func _split_long_dialogues() -> void:
 	var split_entries: Array[Dictionary] = []
 	for entry in entries:
 		var text: String = str(entry.get("text", ""))
+		if entry.get("focus", false) or entry.get("no_split", false):
+			split_entries.append(entry.duplicate())
+			continue
 		var is_mind: bool = str(entry.get("kind", "")) == "mind"
 		var has_mind_markers: bool = is_mind or text.begins_with("*") or text.ends_with("*")
 		var has_start_marker: bool = is_mind or text.begins_with("*")
@@ -171,6 +353,8 @@ func _split_long_dialogues() -> void:
 		var character_limit: int = 58 if is_mind else 78
 		if str(entry.get("image", "")) == "scene10.png":
 			character_limit = 38 if is_mind else 48
+		if str(entry.get("image", "")) == "scene11.png" and entry.get("sequence", false):
+			character_limit = 34 if is_mind else 42
 		if str(entry.get("kind", "")) == "instruction":
 			character_limit = 180
 		if has_mind_markers:
@@ -211,7 +395,13 @@ func _show_entry() -> void:
 		_show_ending()
 		return
 	current_entry = entries[entry_index]
+	if current_entry.get("focus", false):
+		_start_focus()
+		return
 	continue_label.visible = false
+	dialogue_panel.visible = true
+	dialogue_label.visible = true
+	focus_instructions.visible = false
 	if current_entry.get("black", false):
 		background.texture = null
 		black_background.visible = true
@@ -222,6 +412,8 @@ func _show_entry() -> void:
 		_apply_camera_focus()
 	_update_ambience()
 	_style_dialogue()
+	dialogue_label.visible = true
+	focus_instructions.visible = false
 	dialogue_label.text = ""
 	waiting_for_input = false
 	is_typing = true
@@ -235,6 +427,191 @@ func _show_entry() -> void:
 		waiting_for_input = true
 	else:
 		_type_words(token)
+
+func _start_focus() -> void:
+	vn_focus_mode = true
+	vn_focus_intro = true
+	focus_state = FocusState.EFFORT
+	focus_effort = 0.0
+	focus_window_timer = 0.0
+	focus_fakeout_timer = 0.0
+	focus_fakeout_armed = true
+	focus_exit_prompt = false
+	background.texture = null
+	black_background.visible = false
+	focus_image.texture = load("res://scenes/scene12.png")
+	focus_image.visible = true
+	focus_image.scale = Vector2.ONE
+	focus_image.position = Vector2.ZERO
+	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+	focus_vignette.visible = false
+	var vignette_material := focus_vignette.material as ShaderMaterial
+	vignette_material.set_shader_parameter("vignette_alpha", 0.0)
+	focus_status.visible = false
+	focus_hint.visible = false
+	dialogue_panel.visible = true
+	dialogue_panel.position = Vector2(820, 1580)
+	dialogue_panel.size = DIALOGUE_PANEL_SIZE
+	dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(Color("#fff9f0b8")))
+	dialogue_label.position = Vector2(60, 25)
+	dialogue_label.size = DIALOGUE_TEXT_SIZE
+	dialogue_label.visible = false
+	focus_instructions.text = "[center]Hold [lb]W[rb] and [lb]S[rb] until you turn myself ugly.[/center]\n[center]Release when it's done.[/center]\n[center][lb]ENTER[rb] to begin.[/center]"
+	focus_instructions.visible = true
+	dialogue_label.add_theme_font_size_override("font_size", 54)
+	dialogue_label.add_theme_font_override("font", FREDOKA_FONT)
+	dialogue_label.add_theme_color_override("font_color", Color("#161616"))
+	dialogue_label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
+	dialogue_label.add_theme_constant_override("shadow_offset_x", 0)
+	dialogue_label.add_theme_constant_override("shadow_offset_y", 0)
+	continue_label.visible = false
+	mind_heartbeat_player.stop()
+	ambience_player.stop()
+
+func _begin_focus_game() -> void:
+	vn_focus_intro = false
+	dialogue_panel.visible = false
+	focus_instructions.visible = false
+	focus_state = FocusState.EFFORT
+	focus_effort = 0.0
+	continue_label.visible = false
+	focus_status.visible = false
+	focus_hint.visible = false
+	ambience_player.stop()
+	sonido_esfuerzo.stream = effort_stream
+	sonido_esfuerzo.pitch_scale = 0.85
+	sonido_esfuerzo.volume_db = 0.0
+	sonido_esfuerzo.play()
+
+func _apply_focus_tension() -> void:
+	var progress := focus_effort / FOCUS_EFFORT_MAX
+	var zoom := 1.0 + progress * 0.08
+	var shake := sin(Time.get_ticks_msec() * 0.045) * progress * 5.0
+	focus_image.scale = Vector2(zoom, zoom)
+	focus_image.position = Vector2(shake, cos(Time.get_ticks_msec() * 0.052) * progress * 3.0)
+	sonido_esfuerzo.pitch_scale = lerp(0.85, 1.65, progress)
+	sonido_esfuerzo.volume_db = lerp(0.0, 3.0, progress)
+
+func _begin_focus_fakeout() -> void:
+	focus_fakeout_armed = false
+	focus_fakeout_timer = FOCUS_FAKEOUT_TIME
+	focus_image.texture = load("res://scenes/scene13.png")
+	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+
+func _begin_focus_window() -> void:
+	focus_state = FocusState.WINDOW
+	focus_window_timer = FOCUS_WINDOW_TIME
+	focus_image.texture = load("res://scenes/scene13.png")
+	focus_image.scale = Vector2.ONE
+	focus_image.position = Vector2.ZERO
+	focus_shader_material.set_shader_parameter("blur_amount", FOCUS_CLIMAX_BLUR)
+	focus_vignette.visible = false
+	sonido_esfuerzo.stop()
+	sonido_corte.stream = cut_stream
+	sonido_corte.play()
+
+func _complete_focus() -> void:
+	focus_state = FocusState.RESOLUTION
+	sonido_esfuerzo.stop()
+	focus_status.visible = false
+	focus_hint.visible = false
+	mind_heartbeat_player.stop()
+	ambience_player.stop()
+	dialogue_panel.visible = false
+	focus_instructions.visible = false
+	continue_label.visible = false
+	waiting_for_input = false
+	vn_focus_mode = false
+	focus_vignette.visible = true
+	var resolution_tween := create_tween()
+	resolution_tween.tween_method(_update_resolution_effect, 0.0, 1.0, FOCUS_RESOLUTION_TIME)
+	resolution_tween.tween_callback(_finish_resolution_effect)
+
+func _reset_focus_cycle() -> void:
+	focus_image.texture = load("res://scenes/scene12.png")
+	focus_image.visible = true
+	focus_state = FocusState.EFFORT
+	focus_effort = 0.0
+	focus_window_timer = 0.0
+	focus_fakeout_timer = 0.0
+	focus_fakeout_armed = true
+	focus_image.scale = Vector2.ONE
+	focus_image.position = Vector2.ZERO
+	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+	focus_vignette.visible = false
+	var vignette_material := focus_vignette.material as ShaderMaterial
+	vignette_material.set_shader_parameter("vignette_alpha", 0.0)
+	sonido_esfuerzo.pitch_scale = 0.85
+	sonido_esfuerzo.volume_db = 0.0
+	sonido_esfuerzo.play()
+
+func _update_focus_music(is_pressing: bool) -> void:
+	if not is_pressing:
+		if ambience_player.playing:
+			ambience_player.stop()
+		return
+	if ambience_player.stream != FOCUS_SUCCESS_STREAM or not ambience_player.playing:
+		ambience_player.stream = FOCUS_SUCCESS_STREAM
+		ambience_player.volume_db = 0.0
+		ambience_player.play(5.0)
+	elif ambience_player.get_playback_position() >= FOCUS_SUCCESS_STREAM.get_length():
+		ambience_player.play(5.0)
+
+func _update_resolution_effect(progress: float) -> void:
+	focus_shader_material.set_shader_parameter("blur_amount", lerp(FOCUS_CLIMAX_BLUR, 0.0, progress))
+	var shake_amount: float = lerp(3.0, 24.0, progress)
+	focus_image.position = Vector2(
+		sin(Time.get_ticks_msec() * 0.06) * shake_amount,
+		cos(Time.get_ticks_msec() * 0.071) * shake_amount
+	)
+	focus_image.scale = Vector2.ONE * (1.0 + progress * 0.035)
+	var vignette_material := focus_vignette.material as ShaderMaterial
+	vignette_material.set_shader_parameter("vignette_alpha", progress * 0.85)
+
+func _finish_resolution_effect() -> void:
+	focus_image.position = Vector2.ZERO
+	focus_image.scale = Vector2.ONE
+	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+	var vignette_material := focus_vignette.material as ShaderMaterial
+	vignette_material.set_shader_parameter("vignette_alpha", 0.0)
+	focus_vignette.visible = false
+	focus_exit_prompt = true
+	dialogue_panel.visible = true
+	dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(Color("#fff9f0b8")))
+	dialogue_label.visible = false
+	focus_instructions.text = "[center]Press [ENTER][/center]"
+	focus_instructions.visible = true
+
+func _leave_focus_game() -> void:
+	focus_exit_prompt = false
+	vn_focus_mode = false
+	_stop_mixing_game_loop()
+	dialogue_panel.visible = false
+	focus_instructions.visible = false
+	focus_image.visible = false
+	background.visible = true
+	background.texture = load("res://scenes/scene11.png")
+	entry_index += 1
+	_show_entry()
+
+func _start_mixing_game_loop(start_position: float) -> void:
+	mixing_game_active = true
+	mixing_loop_start = start_position
+	ambience_player.stop()
+	ambience_player.stream = FOCUS_SUCCESS_STREAM
+	ambience_player.volume_db = 0.0
+	ambience_player.play(mixing_loop_start)
+
+func _stop_mixing_game_loop() -> void:
+	mixing_game_active = false
+	if ambience_player.stream == FOCUS_SUCCESS_STREAM:
+		ambience_player.stop()
+
+func _maintain_mixing_game_loop() -> void:
+	if not ambience_player.playing:
+		ambience_player.play(mixing_loop_start)
+	elif ambience_player.get_playback_position() >= 19.0:
+		ambience_player.play(mixing_loop_start)
 
 func _type_words(token: int) -> void:
 	var delay := float(current_entry.get("slow", 0.045))
@@ -277,9 +654,20 @@ func _apply_camera_focus() -> void:
 		background.position = Vector2(-2880, -270)
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
-			_advance()
+	var advance_pressed := false
+	if event is InputEventKey:
+		advance_pressed = event.pressed and not event.echo and (event.keycode == KEY_ENTER or event.keycode == KEY_SPACE)
+	elif event is InputEventMouseButton:
+		advance_pressed = event.pressed and event.button_index == MOUSE_BUTTON_LEFT
+	if advance_pressed:
+		if focus_exit_prompt:
+			_leave_focus_game()
+			return
+		if vn_focus_mode:
+			if vn_focus_intro:
+				_begin_focus_game()
+			return
+		_advance()
 
 func _style_dialogue() -> void:
 	var is_mind: bool = current_entry.get("kind", "") == "mind"
@@ -288,6 +676,14 @@ func _style_dialogue() -> void:
 		dialogue_label.add_theme_font_size_override("font_size", 58)
 		dialogue_label.add_theme_font_override("font", ROCK_SALT_FONT)
 		dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(PANEL_COLOR))
+	elif str(current_entry.get("kind", "")) == "instruction" or str(current_entry.get("kind", "")) == "prompt":
+		dialogue_label.add_theme_color_override("font_color", Color("#161616"))
+		dialogue_label.add_theme_font_size_override("font_size", 62)
+		dialogue_label.add_theme_font_override("font", FREDOKA_FONT)
+		dialogue_label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
+		dialogue_label.add_theme_constant_override("shadow_offset_x", 0)
+		dialogue_label.add_theme_constant_override("shadow_offset_y", 0)
+		dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(Color("#fff9f0b8")))
 	else:
 		dialogue_label.add_theme_color_override("font_color", TEXT_COLOR)
 		dialogue_label.add_theme_font_size_override("font_size", 62)
@@ -331,9 +727,12 @@ func _style_dialogue() -> void:
 		dialogue_panel.size = Vector2(1200, 260)
 		dialogue_label.size = Vector2(1080, 210)
 	elif image_name == "scene11.png":
-		dialogue_panel.position = Vector2(1050, 900)
-		dialogue_panel.size = Vector2(900, 240)
-		dialogue_label.size = Vector2(780, 190)
+		if str(current_entry.get("speaker", "")) == "xcarlet":
+			dialogue_panel.position = Vector2(1750, 880)
+		else:
+			dialogue_panel.position = Vector2(650, 880)
+		dialogue_panel.size = Vector2(1450, 320)
+		dialogue_label.size = Vector2(1330, 270)
 	if str(current_entry.get("kind", "")) == "prompt":
 		dialogue_panel.position = Vector2(1120, 900)
 	elif str(current_entry.get("kind", "")) == "instruction":
@@ -348,9 +747,17 @@ func _build_audio() -> void:
 	typewriter_stream = NORMAL_DIALOGUE_STREAM
 	breath_stream = BREATHING_STREAM
 	heartbeat_stream = HEARTBEAT_STREAM
+	effort_stream = FOCUS_EFFORT_STREAM
+	cut_stream = _make_tone(0.12, 180.0, 0.32, false)
+	var effort_mp3 := effort_stream as AudioStreamMP3
+	if effort_mp3:
+		effort_mp3.loop = true
 	var heartbeat_mp3 := heartbeat_stream as AudioStreamMP3
 	if heartbeat_mp3:
 		heartbeat_mp3.loop = true
+	var success_mp3 := FOCUS_SUCCESS_STREAM as AudioStreamMP3
+	if success_mp3:
+		success_mp3.loop = false
 
 func _make_key_sound() -> AudioStreamWAV:
 	var rate := 22050
@@ -399,8 +806,23 @@ func _make_heartbeat() -> AudioStreamWAV:
 func _update_ambience() -> void:
 	var image_name: String = str(current_entry.get("image", ""))
 	var is_mind: bool = current_entry.get("kind", "") == "mind"
+	var mixing_mode := str(current_entry.get("mixing", ""))
+	var is_focus_sequence: bool = current_entry.get("sequence", false)
+	if is_focus_sequence:
+		mind_breath_player.stop()
+		mind_heartbeat_player.stop()
+	if mixing_mode == "start":
+		_start_mixing_game_loop(float(current_entry.get("mixing_start", 0.5)))
+	elif mixing_mode == "stop":
+		_stop_mixing_game_loop()
+	if mixing_mode == "keep" or mixing_mode == "start":
+		return
 	if is_mind:
 		ambience_player.stop()
+		if not mind_breath_player.playing:
+			mind_breath_player.stream = breath_stream
+			mind_breath_player.volume_db = 0.0
+			mind_breath_player.play()
 		if not mind_heartbeat_player.playing:
 			mind_heartbeat_player.stream = heartbeat_stream
 			mind_heartbeat_player.volume_db = 0.0
@@ -415,9 +837,15 @@ func _update_ambience() -> void:
 	else:
 		ambience_player.stop()
 		mind_heartbeat_player.stop()
-	mind_breath_player.stop()
+		mind_breath_player.stop()
 
 func _show_ending() -> void:
+	_stop_mixing_game_loop()
 	background.texture = null
 	dialogue_panel.visible = false
+	focus_image.visible = false
+	focus_vignette.visible = false
+	focus_instructions.visible = false
+	focus_status.visible = false
+	focus_hint.visible = false
 	continue_label.text = "THE END"
