@@ -2,11 +2,25 @@ extends Control
 
 const BASE_SIZE := Vector2(3840.0, 2160.0)
 const TEXT_COLOR := Color("#fff9f0")
-const PANEL_COLOR := Color("#18212a99")
+const PANEL_COLOR := Color(0.22, 0.23, 0.25, 0.50)
+const MIND_PANEL_COLOR := Color(0.18, 0.18, 0.20, 0.56)
+const SPEAKER_BG_COLOR := Color(0.18, 0.19, 0.21, 0.68)
 const MIND_COLOR := Color("#ff5a5f")
 const ACCENT_COLOR := Color("#fff9f0")
-const DIALOGUE_PANEL_SIZE := Vector2(1600.0, 280.0)
-const DIALOGUE_TEXT_SIZE := Vector2(1480.0, 230.0)
+
+# Colores por personaje
+const JAMMY_COLOR := Color("#f5d08a")
+const COUSIN_COLOR := Color("#a3aab2")
+const XCARLET_COLOR := Color("#5bc0eb")
+const GRANDMA_COLOR := Color("#f2a6b8")
+const CLASSMATES_TAB_COLOR := Color("#46527a")
+const CLASSMATES_BOX_COLOR := Color("#cfd5e0")
+const CLASSMATES_TEXT_COLOR := Color("#c6cee0")
+
+const DIALOGUE_PANEL_SIZE := Vector2(1240.0, 230.0)
+const DIALOGUE_PANEL_POS := Vector2(1300.0, 960.0)
+const SPEAKER_PANEL_SIZE := Vector2(300.0, 62.0)
+
 const FREDOKA_FONT = preload("res://fonts/Fredoka-Regular.ttf")
 const ROCK_SALT_FONT = preload("res://fonts/RockSalt-Regular.ttf")
 const NORMAL_DIALOGUE_STREAM = preload("res://assets/sounds/Soft_pencil_tap_on_n_#1-1794378651940.mp3")
@@ -14,18 +28,22 @@ const BREATHING_STREAM = preload("res://assets/sounds/breathing1.mp3")
 const HEARTBEAT_STREAM = preload("res://assets/sounds/Hbeating1.mp3")
 const FOCUS_EFFORT_STREAM = preload("res://assets/sounds/audioJuego1.mp3")
 const FOCUS_SUCCESS_STREAM = preload("res://assets/sounds/mixingGame1.mp3")
+
+# Dificultad aumentada del minijuego
 const FOCUS_EFFORT_MAX := 100.0
-const FOCUS_EFFORT_RATE := 18.0
-const FOCUS_EFFORT_DECAY := 60.0
-const FOCUS_WINDOW_TIME := 2.35
-const FOCUS_FAKEOUT_TIME := 0.07
+const FOCUS_EFFORT_RATE := 14.5
+const FOCUS_EFFORT_DECAY := 85.0
+const FOCUS_WINDOW_TIME := 1.15
+const FOCUS_FAKEOUT_TIME := 0.065
 const FOCUS_RESOLUTION_TIME := 5.5
-const FOCUS_CLIMAX_BLUR := 8.5
+const FOCUS_CLIMAX_BLUR := 9.5
 
 var background: TextureRect
 var black_background: ColorRect
 var dialogue_panel: Panel
 var dialogue_label: Label
+var speaker_panel: Panel
+var speaker_label: Label
 var continue_label: Label
 var typewriter_player: AudioStreamPlayer
 var ambience_player: AudioStreamPlayer
@@ -61,6 +79,7 @@ var focus_status: Label
 var focus_hint: Label
 var focus_fakeout_timer := 0.0
 var focus_fakeout_armed := true
+var focus_fakeout2_armed := true
 var focus_exit_prompt := false
 var mixing_game_active := false
 var mixing_loop_start := 0.5
@@ -77,7 +96,7 @@ func _process(delta: float) -> void:
 		_maintain_mixing_game_loop()
 	if not vn_focus_mode or vn_focus_intro:
 		return
-	var is_pressing := Input.is_key_pressed(KEY_W) or Input.is_key_pressed(KEY_S)
+	var is_pressing := Input.is_key_pressed(KEY_W) and Input.is_key_pressed(KEY_S)
 	_update_focus_music(is_pressing)
 	if focus_fakeout_timer > 0.0:
 		if not is_pressing:
@@ -95,9 +114,15 @@ func _process(delta: float) -> void:
 			else:
 				focus_effort = max(focus_effort - FOCUS_EFFORT_DECAY * delta, 0.0)
 			_apply_focus_tension()
-			if focus_effort < 70.0:
+			if focus_effort < 68.0:
 				focus_fakeout_armed = true
-			elif focus_effort >= 80.0 and focus_fakeout_armed:
+			elif focus_effort >= 78.0 and focus_fakeout_armed:
+				focus_fakeout_armed = false
+				_begin_focus_fakeout()
+			if focus_effort < 86.0:
+				focus_fakeout2_armed = true
+			elif focus_effort >= 92.0 and focus_fakeout2_armed:
+				focus_fakeout2_armed = false
 				_begin_focus_fakeout()
 			if focus_effort >= FOCUS_EFFORT_MAX:
 				_begin_focus_window()
@@ -126,33 +151,53 @@ func _build_ui() -> void:
 	move_child(black_background, 0)
 
 	dialogue_panel = Panel.new()
-	dialogue_panel.position = Vector2(820, 1580)
+	dialogue_panel.position = DIALOGUE_PANEL_POS
 	dialogue_panel.size = DIALOGUE_PANEL_SIZE
 	dialogue_panel.z_index = 10
-	dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(PANEL_COLOR))
+	dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(PANEL_COLOR, Color(1.0, 1.0, 1.0, 0.22)))
 	add_child(dialogue_panel)
 
+	speaker_panel = Panel.new()
+	speaker_panel.position = Vector2(DIALOGUE_PANEL_POS.x + 36.0, DIALOGUE_PANEL_POS.y - SPEAKER_PANEL_SIZE.y + 2.0)
+	speaker_panel.size = SPEAKER_PANEL_SIZE
+	speaker_panel.z_index = 11
+	speaker_panel.visible = false
+	speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, JAMMY_COLOR))
+	add_child(speaker_panel)
+
+	speaker_label = Label.new()
+	speaker_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	speaker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	speaker_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	speaker_label.add_theme_font_size_override("font_size", 36)
+	speaker_label.add_theme_font_override("font", FREDOKA_FONT)
+	speaker_label.add_theme_color_override("font_color", JAMMY_COLOR)
+	speaker_label.add_theme_color_override("font_shadow_color", Color("#000000e6"))
+	speaker_label.add_theme_constant_override("shadow_offset_x", 2)
+	speaker_label.add_theme_constant_override("shadow_offset_y", 2)
+	speaker_panel.add_child(speaker_label)
+
 	dialogue_label = Label.new()
-	dialogue_label.position = Vector2(60, 25)
-	dialogue_label.size = DIALOGUE_TEXT_SIZE
+	dialogue_label.position = Vector2(44, 24)
+	dialogue_label.size = Vector2(DIALOGUE_PANEL_SIZE.x - 88.0, DIALOGUE_PANEL_SIZE.y - 48.0)
 	dialogue_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	dialogue_label.clip_text = false
 	dialogue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	dialogue_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	dialogue_label.add_theme_font_size_override("font_size", 62)
+	dialogue_label.add_theme_font_size_override("font_size", 46)
 	dialogue_label.add_theme_font_override("font", FREDOKA_FONT)
 	dialogue_label.add_theme_color_override("font_color", TEXT_COLOR)
-	dialogue_label.add_theme_color_override("font_shadow_color", Color("#000000cc"))
-	dialogue_label.add_theme_constant_override("shadow_offset_x", 5)
-	dialogue_label.add_theme_constant_override("shadow_offset_y", 5)
+	dialogue_label.add_theme_color_override("font_shadow_color", Color("#000000e6"))
+	dialogue_label.add_theme_constant_override("shadow_offset_x", 4)
+	dialogue_label.add_theme_constant_override("shadow_offset_y", 4)
 	dialogue_panel.add_child(dialogue_label)
 
 	continue_label = Label.new()
-	continue_label.position = Vector2(0, 2020)
+	continue_label.position = Vector2(0, 2065)
 	continue_label.size = Vector2(3840, 70)
 	continue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	continue_label.z_index = 11
-	continue_label.add_theme_font_size_override("font_size", 42)
+	continue_label.z_index = 12
+	continue_label.add_theme_font_size_override("font_size", 40)
 	continue_label.add_theme_color_override("font_color", ACCENT_COLOR)
 	continue_label.text = "ENTER / SPACE"
 	continue_label.visible = false
@@ -212,17 +257,17 @@ void fragment() {
 	add_child(focus_vignette)
 
 	focus_instructions = RichTextLabel.new()
-	focus_instructions.position = Vector2(60, 25)
-	focus_instructions.size = DIALOGUE_TEXT_SIZE
+	focus_instructions.position = Vector2(44, 24)
+	focus_instructions.size = Vector2(DIALOGUE_PANEL_SIZE.x - 88.0, DIALOGUE_PANEL_SIZE.y - 48.0)
 	focus_instructions.bbcode_enabled = true
 	focus_instructions.fit_content = false
 	focus_instructions.scroll_active = false
 	focus_instructions.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	focus_instructions.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	focus_instructions.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	focus_instructions.add_theme_font_size_override("normal_font_size", 54)
+	focus_instructions.add_theme_font_size_override("normal_font_size", 46)
 	focus_instructions.add_theme_font_override("normal_font", FREDOKA_FONT)
-	focus_instructions.add_theme_color_override("default_color", Color("#000000"))
+	focus_instructions.add_theme_color_override("default_color", Color("#161616"))
 	focus_instructions.visible = false
 	dialogue_panel.add_child(focus_instructions)
 
@@ -269,74 +314,78 @@ func _build_script() -> void:
 	entries = [
 		{"image": "scene1_4k.png", "text": "To continue, press SPACE", "instant": true, "kind": "prompt"},
 		{"image": "scene1_4k.png", "text": "The asterisks (* *) indicate that the dialogue belongs to the character's mind.", "instant": false, "kind": "instruction"},
-		{"image": "scene1_4k.png", "text": "We still gotta build downtown, cousin. It's better if I call mom and tell her that it will take much longer.", "instant": false, "kind": "spoken", "slow": 0.055},
-		{"image": "scene2_4k.png", "text": "I love you so much, sweetie.", "instant": false, "kind": "spoken"},
-		{"image": "scene2_4k.png", "text": "Please remember me when I've passed away.", "instant": false, "kind": "spoken"},
+		{"image": "scene1_4k.png", "text": "We still gotta build downtown, cousin. It's better if I call mom and tell her that it will take much longer.", "instant": false, "kind": "spoken", "speaker": "Cousin", "slow": 0.055},
+		{"image": "scene2_4k.png", "text": "I love you so much, sweetie.", "instant": false, "kind": "spoken", "speaker": "Grandma"},
+		{"image": "scene2_4k.png", "text": "Please remember me when I've passed away.", "instant": false, "kind": "spoken", "speaker": "Grandma"},
 		{"black": true, "text": "*But one day, something started to paint my life with a melancholic yellow.*", "instant": false, "kind": "narration"},
-		{"image": "scene3.png", "text": "*I'm so anxious. I don't wanna arrive at the party.*", "instant": false, "kind": "narration", "ambience": "breath_heart"},
-		{"image": "scene3.png", "text": "*You won't be able to control your eye movements.*", "instant": true, "kind": "mind"},
-		{"image": "scene3.png", "text": "*You won't be able to control what you say.*", "instant": true, "kind": "mind"},
-		{"image": "scene3.png", "text": "*Don't worry, all those thoughts are lies.*", "instant": false, "kind": "spoken"},
-		{"image": "scene3.png", "text": "*Nobody can notice things like my eye movements or a shift in my mood.*", "instant": false, "kind": "spoken"},
-		{"image": "scene3.png", "text": "*But how do people notice when your eye movements aren't okay, or when somebody is, for example... falling in love with you?.*", "instant": true, "kind": "mind"},
-		{"image": "scene3.png", "text": "*Shut up, mind.*", "instant": false, "kind": "spoken"},
-		{"image": "scene3.png", "text": "*Actions will happen faster than you can react. For example, if you see that old aunt who doesn't get along with you, you might look at her as if you were falling in love with her.*", "instant": true, "kind": "mind"},
-		{"image": "scene3.png", "text": "*You will speak in a tone of voice you don't like because your mind will trigger it before you can do anything about it.*", "instant": true, "kind": "mind"},
-		{"image": "scene3.png", "text": "*I think I'm ruined. I just wanna close my eyes and forget everything.*", "instant": false, "kind": "spoken"},
-		{"image": "scene4.png", "text": "*Maybe if I type what I'm feeling during these holidays, I'll find something revelatory.*", "instant": false, "kind": "narration", "slow": 0.085},
-		{"image": "scene5.png", "text": "*What do I have if I get unwanted thoughts and the need to do something to get rid of them?*", "instant": false, "kind": "narration", "slow": 0.13},
-		{"image": "scene6.png", "text": "*It says... Obsessive-Compulsive Disorder, and the cycle is a trap. But I feel like it happens...", "instant": false, "kind": "narration"},
-		{"image": "scene6.png", "text": "automatically. And it also says that it's... INCURABLE.*", "instant": false, "kind": "narration"},
-		{"image": "scene6.png", "text": "*Your life can be summed up by the fact that this illness will bother you until your very last second.*", "instant": true, "kind": "mind"},
-		{"image": "scene6.png", "text": "*My biggest dream is just...", "instant": false, "kind": "narration"},
-		{"image": "scene6.png", "text": "TO HAVE A NORMAL LIFE. FOR EXAMPLE, TO HAVE FUN WITHOUT THIS...*", "instant": false, "kind": "narration"},
-		{"image": "scene6.png", "text": "*DESPICABLE...*", "instant": false, "kind": "narration"},
-		{"image": "scene6.png", "text": "*BASTARD!*", "instant": false, "kind": "narration", "ambience": "cry"},
-		{"image": "scene6.png", "text": "*Say whatever you want, nothing will change. And you know it... you know...*", "instant": true, "kind": "mind"},
-		{"image": "scene6.png", "text": "*You aren't brave enough to end this forever by yourself.*", "instant": true, "kind": "mind"},
-		{"image": "scene6.png", "text": "*You know your destiny is worse than death.*", "instant": true, "kind": "mind"},
-		{"image": "scene7and8.png", "text": "*Ugh... tomorrow is my first day of high school. It's the only school of this grade in this county.*", "instant": false, "kind": "narration"},
-		{"image": "scene7and8.png", "text": "*I'll see the same people I've always seen at school. What if...", "instant": false, "kind": "narration", "ambience": "breath"},
-		{"image": "scene7and8.png", "text": "...they don't treat me like they used to 'cause of OCD, and I take all these troubles outside?*", "instant": false, "kind": "narration"},
-		{"image": "scene7and8.png", "text": "*Oh, you will. And you know, you haven't been diagnosed by a professional.*", "instant": true, "kind": "mind"},
-		{"image": "scene7and8.png", "text": "*So you have both problems: the mental illness and the uncertainty of not being sure if it's even OCD.*", "instant": true, "kind": "mind"},
-		{"image": "scene7and8.png", "text": "*So it's more difficult to treat something when you don't even know what it is.*", "instant": true, "kind": "mind"},
-		{"image": "scene7and8.png", "text": "*It's scary to do it, but it's even scarier to live 'cause I can't end this easily.*", "instant": false, "kind": "narration"},
-		{"image": "scene9.png", "text": "You're insane. We don't like you.", "instant": false, "kind": "spoken"},
-		{"image": "scene9.png", "text": "Yesterday I saw ya at the party while I was doing the team's project.", "instant": false, "kind": "spoken"},
-		{"image": "scene9.png", "text": "At least we have friends...", "instant": false, "kind": "spoken", "ambience": "breath"},
-		{"image": "scene9.png", "text": "*What if you start to behave like it never happened?*", "instant": true, "kind": "mind"},
-		{"image": "scene9.png", "text": "*Like for example a cheerful mood... you won't be able to control it.*", "instant": true, "kind": "mind"},
-		{"image": "scene9.png", "text": "*The more you try to control your seriousness, the more you'll do the opposite.*", "instant": true, "kind": "mind"},
+		{"image": "scene3.png", "text": "*I'm so anxious. I don't wanna arrive at the party.*", "instant": false, "kind": "narration", "speaker": "Jammy", "ambience": "breath_heart"},
+		{"image": "scene3.png", "text": "*You won't be able to control your eye movements.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*You won't be able to control what you say.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*Don't worry, all those thoughts are lies.*", "instant": false, "kind": "spoken", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*Nobody can notice things like my eye movements or a shift in my mood.*", "instant": false, "kind": "spoken", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*But how do people notice when your eye movements aren't okay, or when somebody is, for example... falling in love with you?.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*Shut up, mind.*", "instant": false, "kind": "spoken", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*Actions will happen faster than you can react. For example, if you see that old aunt who doesn't get along with you, you might look at her as if you were falling in love with her.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*You will speak in a tone of voice you don't like because your mind will trigger it before you can do anything about it.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene3.png", "text": "*I think I'm ruined. I just wanna close my eyes and forget everything.*", "instant": false, "kind": "spoken", "speaker": "Jammy"},
+		{"image": "scene4.png", "text": "*Maybe if I type what I'm feeling during these holidays, I'll find something revelatory.*", "instant": false, "kind": "narration", "speaker": "Jammy", "slow": 0.085},
+		{"image": "scene5.png", "text": "*What do I have if I get unwanted thoughts and the need to do something to get rid of them?*", "instant": false, "kind": "narration", "speaker": "Jammy", "slow": 0.13},
+		{"image": "scene6.png", "text": "*It says... Obsessive-Compulsive Disorder, and the cycle is a trap. But I feel like it happens...", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "automatically. And it also says that it's... INCURABLE.*", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "*Your life can be summed up by the fact that this illness will bother you until your very last second.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "*My biggest dream is just...", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "TO HAVE A NORMAL LIFE. FOR EXAMPLE, TO HAVE FUN WITHOUT THIS...*", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "*DESPICABLE...*", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "*BASTARD!*", "instant": false, "kind": "narration", "speaker": "Jammy", "ambience": "cry"},
+		{"image": "scene6.png", "text": "*Say whatever you want, nothing will change. And you know it... you know...*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "*You aren't brave enough to end this forever by yourself.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene6.png", "text": "*You know your destiny is worse than death.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene7and8.png", "text": "*Ugh... tomorrow is my first day of high school. It's the only school of this grade in this county.*", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene7and8.png", "text": "*I'll see the same people I've always seen at school. What if...", "instant": false, "kind": "narration", "speaker": "Jammy", "ambience": "breath"},
+		{"image": "scene7and8.png", "text": "...they don't treat me like they used to 'cause of OCD, and I take all these troubles outside?*", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene7and8.png", "text": "*Oh, you will. And you know, you haven't been diagnosed by a professional.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene7and8.png", "text": "*So you have both problems: the mental illness and the uncertainty of not being sure if it's even OCD.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene7and8.png", "text": "*So it's more difficult to treat something when you don't even know what it is.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene7and8.png", "text": "*It's scary to do it, but it's even scarier to live 'cause I can't end this easily.*", "instant": false, "kind": "narration", "speaker": "Jammy"},
+		{"image": "scene9.png", "text": "You're insane. We don't like you.", "instant": false, "kind": "spoken", "speaker": "Classmates"},
+		{"image": "scene9.png", "text": "Yesterday I saw ya at the party while I was doing the team's project.", "instant": false, "kind": "spoken", "speaker": "Classmates"},
+		{"image": "scene9.png", "text": "At least we have friends...", "instant": false, "kind": "spoken", "speaker": "Classmates", "ambience": "breath"},
+		{"image": "scene9.png", "text": "*What if you start to behave like it never happened?*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene9.png", "text": "*Like for example a cheerful mood... you won't be able to control it.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene9.png", "text": "*The more you try to control your seriousness, the more you'll do the opposite.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
 		{"black": true, "text": "*My grandma has passed away. I couldn't enjoy her last moments due to OCD.*", "instant": false, "kind": "narration"},
 		{"black": true, "text": "*Tomorrow will be my first day at Art University.*", "instant": false, "kind": "narration", "ambience": "breath"},
 		{"black": true, "text": "*I don't want to ruin it like high school. I've been feeling so guilty 'bout it and everything.*", "instant": false, "kind": "narration"},
 		{"black": true, "text": "*I know that not everything is my fault, but I can't help thinking this way.*", "instant": false, "kind": "narration"},
 		{"black": true, "text": "*Everything hurts.*", "instant": false, "kind": "narration"},
 		{"black": true, "text": "*I wanna cry but I can't.*", "instant": false, "kind": "narration"},
-		{"image": "scene10.png", "text": "*They can't notice you.*", "instant": false, "kind": "narration", "ambience": "heartbeat"},
-		{"image": "scene10.png", "text": "*But I can't stop being ridiculously tense, anyways.*", "instant": false, "kind": "narration", "ambience": "heartbeat"},
-		{"image": "scene10.png", "text": "*Oh no, no, no... somebody's approaching me.*", "instant": false, "kind": "narration", "ambience": "heartbeat"},
-		{"image": "scene10.png", "text": "*What if I mess it up like I messed up other relationships?*", "instant": true, "kind": "mind"},
-		{"image": "scene10.png", "text": "*Where can I turn my head to accomplish both: not looking like I'm ignoring her, and not looking at her while she's coming over?*", "instant": true, "kind": "mind"},
-		{"image": "scene10.png", "text": "*Your face looks like you hate her. You try to fix it, but it isn't enough.*", "instant": true, "kind": "mind"},
-		{"image": "scene11.png", "text": "Hiiii!", "instant": false, "kind": "spoken", "ambience": "heartbeat"},
-		{"image": "scene12.png", "text": "*This girl's so pretty...I like her. If I look ugly, I'll feel way less pressure around her, 'cause I won't be liked by her, so my OCD won't have the chance to betray me and fuck this relationship up.*", "instant": false, "kind": "narration"},
+		{"image": "scene10.png", "text": "*They can't notice you.*", "instant": false, "kind": "narration", "speaker": "Jammy", "ambience": "heartbeat"},
+		{"image": "scene10.png", "text": "*But I can't stop being ridiculously tense, anyways.*", "instant": false, "kind": "narration", "speaker": "Jammy", "ambience": "heartbeat"},
+		{"image": "scene10.png", "text": "*Oh no, no, no... somebody's approaching me.*", "instant": false, "kind": "narration", "speaker": "Jammy", "ambience": "heartbeat"},
+		{"image": "scene10.png", "text": "*What if I mess it up like I messed up other relationships?*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene10.png", "text": "*Where can I turn my head to accomplish both: not looking like I'm ignoring her, and not looking at her while she's coming over?*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene10.png", "text": "*Your face looks like you hate her. You try to fix it, but it isn't enough.*", "instant": true, "kind": "mind", "speaker": "Jammy"},
+		{"image": "scene11.png", "text": "Hiiii!", "instant": false, "kind": "spoken", "speaker": "Xcarlet", "ambience": "heartbeat"},
+		{"image": "scene12.png", "text": "*This girl's so pretty... I like her. If I look ugly, I'll feel way less pressure around her, 'cause I won't be liked by her, so my OCD won't have the chance to betray me and fuck this relationship up.*", "instant": false, "kind": "narration", "speaker": "Jammy"},
 		{"focus": true, "text": "", "instant": true, "kind": "narration"},
-		{"image": "scene11.png", "text": "Umm, hi.", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
-		{"image": "scene11.png", "text": "You looked so concerned. Is everything okay?", "instant": false, "kind": "spoken", "speaker": "xcarlet", "sequence": true},
-		{"image": "scene11.png", "text": "*Oh no, she actually cares about me. What if I disappoint her? What if I look ungrateful? What if I act rude and she ends up throwing me away like the others.....realizing over time that I'm even worse than at first, and it's not just embarrassment...*", "instant": false, "kind": "narration", "speaker": "jammy", "sequence": true},
-		{"image": "scene11.png", "text": "Umm, yeah, LMAO!", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
-		{"image": "scene11.png", "text": "*LMAO? You looked so ridiculous. Always being such a weirdo.*", "instant": true, "kind": "mind", "speaker": "jammy", "mixing": "start", "sequence": true},
-		{"image": "scene11.png", "text": "*Remember, you're not comfortable touching those cringe notes. I don't wanna give in to a compulsion.....just remember it makes you anxious, and it won't happen again.*", "instant": true, "kind": "narration", "speaker": "jammy", "mixing": "keep", "sequence": true},
-		{"image": "scene11.png", "text": "Well, I'm glad to meet you! My name's Xcarlet, what's your name?", "instant": false, "kind": "spoken", "speaker": "xcarlet", "mixing": "stop", "sequence": true},
-		{"image": "scene11.png", "text": "I'm Jammy.", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
-		{"image": "scene11.png", "text": "Animation?", "instant": false, "kind": "spoken", "speaker": "xcarlet", "sequence": true},
-		{"image": "scene11.png", "text": "Yeah, I guess we'll be in the same class.", "instant": false, "kind": "spoken", "speaker": "jammy", "sequence": true},
-		{"image": "scene11.png", "text": "Then let's head to our classroom!", "instant": false, "kind": "spoken", "speaker": "xcarlet", "sequence": true},
-		{"image": "scene11.png", "text": "*To be honest, I'm doing pretty well.*", "instant": false, "kind": "narration", "speaker": "jammy", "sequence": true},
-		{"image": "scene11.png", "text": "*But what if I mess it up by reminding you that you're still you? You were just on autopilot, and from now on you won't be.....realizing you have years ahead to keep up this act, and at this very moment she could notice something and suddenly be scared of you.*", "instant": true, "kind": "mind", "speaker": "jammy", "mixing": "start", "mixing_start": 5.0, "sequence": true}
+		{"image": "scene11.png", "text": "Umm, hi.", "instant": false, "kind": "spoken", "speaker": "Jammy", "sequence": true},
+		{"image": "scene11.png", "text": "You looked so concerned. Is everything okay?", "instant": false, "kind": "spoken", "speaker": "Xcarlet", "sequence": true},
+		{"image": "scene11.png", "text": "*Oh no, she actually cares about me. What if I disappoint her? What if I look ungrateful? What if I act rude and she ends up throwing me away like the others.....realizing over time that I'm even worse than at first, and it's not just embarrassment...*", "instant": false, "kind": "narration", "speaker": "Jammy", "sequence": true},
+		{"image": "scene11.png", "text": "Umm, yeah, LMAO!", "instant": false, "kind": "spoken", "speaker": "Jammy", "sequence": true},
+		{"image": "scene11.png", "text": "*LMAO? You looked so ridiculous. Always being such a weirdo.*", "instant": true, "kind": "mind", "speaker": "Jammy", "mixing": "start", "mixing_start": 0.5, "sequence": true},
+		{"image": "scene11.png", "text": "*Remember, you're not comfortable touching those cringe notes. I don't wanna give in to a compulsion.....just remember it makes you anxious, and it won't happen again.*", "instant": true, "kind": "narration", "speaker": "Jammy", "mixing": "keep", "sequence": true},
+		{"image": "scene11.png", "text": "Well, I'm glad to meet you! My name's Xcarlet, what's your name?", "instant": false, "kind": "spoken", "speaker": "Xcarlet", "mixing": "stop", "sequence": true},
+		{"image": "scene11.png", "text": "I'm Jammy.", "instant": false, "kind": "spoken", "speaker": "Jammy", "sequence": true},
+		{"image": "scene11.png", "text": "Animation?", "instant": false, "kind": "spoken", "speaker": "Xcarlet", "sequence": true},
+		{"image": "scene11.png", "text": "Yeah, I guess we'll be in the same class.", "instant": false, "kind": "spoken", "speaker": "Jammy", "sequence": true},
+		{"image": "scene11.png", "text": "Then let's head to our classroom!", "instant": false, "kind": "spoken", "speaker": "Xcarlet", "sequence": true},
+		{"image": "scene11.png", "text": "*To be honest, I'm doing pretty well.*", "instant": false, "kind": "narration", "speaker": "Jammy", "sequence": true},
+		{"image": "scene11.png", "text": "*But what if I mess it up by reminding you that you're still you? You were just on autopilot, and from now on you won't be.....realizing you have years ahead to keep up this act, and at this very moment she could notice something and suddenly be scared of you.*", "instant": true, "kind": "mind", "speaker": "Jammy", "mixing": "start", "mixing_start": 5.0, "sequence": true}
 	]
+
+func _fits_in_dialogue_box(candidate: String, font: Font, font_size: int, max_width: float, max_height: float) -> bool:
+	var measured := font.get_multiline_string_size(candidate, HORIZONTAL_ALIGNMENT_CENTER, max_width, font_size)
+	return measured.y <= max_height
 
 func _split_long_dialogues() -> void:
 	var split_entries: Array[Dictionary] = []
@@ -345,40 +394,61 @@ func _split_long_dialogues() -> void:
 		if entry.get("focus", false) or entry.get("no_split", false):
 			split_entries.append(entry.duplicate())
 			continue
-		var is_mind: bool = str(entry.get("kind", "")) == "mind"
-		var has_mind_markers: bool = is_mind or text.begins_with("*") or text.ends_with("*")
+		var kind: String = str(entry.get("kind", ""))
+		var image_name: String = str(entry.get("image", ""))
+		var is_mind: bool = kind == "mind"
 		var has_start_marker: bool = is_mind or text.begins_with("*")
 		var has_end_marker: bool = is_mind or text.ends_with("*")
 		var inner_text: String = text.trim_prefix("*").trim_suffix("*")
-		var character_limit: int = 58 if is_mind else 78
-		if str(entry.get("image", "")) == "scene10.png":
-			character_limit = 38 if is_mind else 48
-		if str(entry.get("image", "")) == "scene11.png" and entry.get("sequence", false):
-			character_limit = 34 if is_mind else 42
-		if str(entry.get("kind", "")) == "instruction":
-			character_limit = 180
-		if has_mind_markers:
-			text = "*" + inner_text + "*"
-		if text.length() <= character_limit:
+
+		var font: Font = ROCK_SALT_FONT if is_mind else FREDOKA_FONT
+		var font_size: int = 36 if is_mind else 46
+		var max_width: float = 1130.0
+		var max_height: float = 165.0
+
+		if kind == "prompt":
+			font_size = 58
+			max_width = 1220.0
+			max_height = 220.0
+		elif kind == "instruction":
+			font_size = 48
+			max_width = 1520.0
+			max_height = 260.0
+		elif image_name == "scene11.png":
+			max_width = 1070.0
+			max_height = 155.0
+		elif image_name == "scene10.png":
+			max_width = 990.0
+			max_height = 155.0
+
+		var full_marked: String = _apply_thought_markers(inner_text, has_start_marker, has_end_marker)
+		if _fits_in_dialogue_box(full_marked, font, font_size, max_width, max_height):
 			var normalized_entry: Dictionary = entry.duplicate()
-			normalized_entry["text"] = _apply_thought_markers(inner_text, has_start_marker, has_end_marker)
+			normalized_entry["text"] = full_marked
 			split_entries.append(normalized_entry)
 			continue
 
 		var chunk := ""
+		var is_first_chunk := true
 		for word in inner_text.split(" "):
 			var candidate: String = word if chunk.is_empty() else chunk + " " + word
-			if not chunk.is_empty() and candidate.length() > character_limit:
+			var marked_candidate: String = _apply_thought_markers(candidate, has_start_marker, has_end_marker)
+			if not chunk.is_empty() and not _fits_in_dialogue_box(marked_candidate, font, font_size, max_width, max_height):
 				var chunk_entry: Dictionary = entry.duplicate()
 				chunk_entry["text"] = _apply_thought_markers(chunk, has_start_marker, false)
+				if not is_first_chunk and str(chunk_entry.get("mixing", "")) == "start":
+					chunk_entry["mixing"] = "keep"
 				split_entries.append(chunk_entry)
 				has_start_marker = false
+				is_first_chunk = false
 				chunk = word
 			else:
 				chunk = candidate
 		if not chunk.is_empty():
 			var final_entry: Dictionary = entry.duplicate()
 			final_entry["text"] = _apply_thought_markers(chunk, has_start_marker, has_end_marker)
+			if not is_first_chunk and str(final_entry.get("mixing", "")) == "start":
+				final_entry["mixing"] = "keep"
 			split_entries.append(final_entry)
 	entries = split_entries
 
@@ -436,7 +506,9 @@ func _start_focus() -> void:
 	focus_window_timer = 0.0
 	focus_fakeout_timer = 0.0
 	focus_fakeout_armed = true
+	focus_fakeout2_armed = true
 	focus_exit_prompt = false
+	speaker_panel.visible = false
 	background.texture = null
 	black_background.visible = false
 	focus_image.texture = load("res://scenes/scene12.png")
@@ -450,20 +522,14 @@ func _start_focus() -> void:
 	focus_status.visible = false
 	focus_hint.visible = false
 	dialogue_panel.visible = true
-	dialogue_panel.position = Vector2(820, 1580)
-	dialogue_panel.size = DIALOGUE_PANEL_SIZE
-	dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(Color("#fff9f0b8")))
-	dialogue_label.position = Vector2(60, 25)
-	dialogue_label.size = DIALOGUE_TEXT_SIZE
+	dialogue_panel.position = Vector2(1270.0, 1520.0)
+	dialogue_panel.size = Vector2(1300.0, 240.0)
+	dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(Color(0.95, 0.94, 0.91, 0.78), Color(0.1, 0.1, 0.1, 0.25)))
 	dialogue_label.visible = false
+	focus_instructions.position = Vector2(44, 24)
+	focus_instructions.size = Vector2(1212.0, 192.0)
 	focus_instructions.text = "[center]Hold [lb]W[rb] and [lb]S[rb] until you turn myself ugly.[/center]\n[center]Release when it's done.[/center]\n[center][lb]ENTER[rb] to begin.[/center]"
 	focus_instructions.visible = true
-	dialogue_label.add_theme_font_size_override("font_size", 54)
-	dialogue_label.add_theme_font_override("font", FREDOKA_FONT)
-	dialogue_label.add_theme_color_override("font_color", Color("#161616"))
-	dialogue_label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
-	dialogue_label.add_theme_constant_override("shadow_offset_x", 0)
-	dialogue_label.add_theme_constant_override("shadow_offset_y", 0)
 	continue_label.visible = false
 	mind_heartbeat_player.stop()
 	ambience_player.stop()
@@ -485,15 +551,14 @@ func _begin_focus_game() -> void:
 
 func _apply_focus_tension() -> void:
 	var progress := focus_effort / FOCUS_EFFORT_MAX
-	var zoom := 1.0 + progress * 0.08
-	var shake := sin(Time.get_ticks_msec() * 0.045) * progress * 5.0
+	var zoom := 1.0 + progress * 0.095
+	var shake := sin(Time.get_ticks_msec() * 0.052) * progress * 6.5
 	focus_image.scale = Vector2(zoom, zoom)
-	focus_image.position = Vector2(shake, cos(Time.get_ticks_msec() * 0.052) * progress * 3.0)
-	sonido_esfuerzo.pitch_scale = lerp(0.85, 1.65, progress)
-	sonido_esfuerzo.volume_db = lerp(0.0, 3.0, progress)
+	focus_image.position = Vector2(shake, cos(Time.get_ticks_msec() * 0.058) * progress * 4.0)
+	sonido_esfuerzo.pitch_scale = lerp(0.85, 1.75, progress)
+	sonido_esfuerzo.volume_db = lerp(0.0, 3.5, progress)
 
 func _begin_focus_fakeout() -> void:
-	focus_fakeout_armed = false
 	focus_fakeout_timer = FOCUS_FAKEOUT_TIME
 	focus_image.texture = load("res://scenes/scene13.png")
 	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
@@ -535,6 +600,7 @@ func _reset_focus_cycle() -> void:
 	focus_window_timer = 0.0
 	focus_fakeout_timer = 0.0
 	focus_fakeout_armed = true
+	focus_fakeout2_armed = true
 	focus_image.scale = Vector2.ONE
 	focus_image.position = Vector2.ZERO
 	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
@@ -577,9 +643,13 @@ func _finish_resolution_effect() -> void:
 	focus_vignette.visible = false
 	focus_exit_prompt = true
 	dialogue_panel.visible = true
-	dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(Color("#fff9f0b8")))
+	dialogue_panel.position = Vector2(1420.0, 1520.0)
+	dialogue_panel.size = Vector2(1000.0, 200.0)
+	dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(Color(0.95, 0.94, 0.91, 0.78), Color(0.1, 0.1, 0.1, 0.25)))
 	dialogue_label.visible = false
-	focus_instructions.text = "[center]Press [ENTER][/center]"
+	focus_instructions.position = Vector2(44, 24)
+	focus_instructions.size = Vector2(912.0, 152.0)
+	focus_instructions.text = "[center]Press [lb]ENTER[rb][/center]"
 	focus_instructions.visible = true
 
 func _leave_focus_game() -> void:
@@ -669,78 +739,174 @@ func _unhandled_input(event: InputEvent) -> void:
 			return
 		_advance()
 
+func _get_speaker_color(speaker_name: String) -> Color:
+	match speaker_name.to_lower():
+		"jammy":
+			return JAMMY_COLOR
+		"cousin":
+			return COUSIN_COLOR
+		"xcarlet":
+			return XCARLET_COLOR
+		"grandma":
+			return GRANDMA_COLOR
+		"classmates":
+			return CLASSMATES_BOX_COLOR
+		_:
+			return TEXT_COLOR
+
 func _style_dialogue() -> void:
-	var is_mind: bool = current_entry.get("kind", "") == "mind"
-	if is_mind:
-		dialogue_label.add_theme_color_override("font_color", MIND_COLOR)
+	var kind: String = str(current_entry.get("kind", ""))
+	var is_mind: bool = kind == "mind"
+	var speaker: String = str(current_entry.get("speaker", ""))
+	var image_name: String = str(current_entry.get("image", ""))
+	var is_black: bool = current_entry.get("black", false)
+
+	if is_mind and speaker.is_empty() and not is_black:
+		speaker = "Jammy"
+
+	dialogue_label.add_theme_color_override("font_shadow_color", Color("#000000f0"))
+	dialogue_label.add_theme_constant_override("shadow_offset_x", 4)
+	dialogue_label.add_theme_constant_override("shadow_offset_y", 4)
+
+	var panel_pos := DIALOGUE_PANEL_POS
+	var panel_size := DIALOGUE_PANEL_SIZE
+
+	if is_black:
+		panel_pos = Vector2(1250.0, 940.0)
+		panel_size = Vector2(1340.0, 250.0)
+	elif image_name == "scene1_4k.png":
+		# Justo sobre la cabeza del Cousin (derecha)
+		panel_pos = Vector2(1620.0, 860.0)
+	elif image_name == "scene2_4k.png":
+		# Centrado sobre la cabeza de Grandma (derecha)
+		panel_pos = Vector2(2080.0, 480.0)
+	elif image_name == "scene3.png":
+		# Centrado en el respaldo del asiento sin tapar la cara de Jammy
+		panel_pos = Vector2(1280.0, 920.0)
+	elif image_name in ["scene4.png", "scene5.png", "scene6.png"]:
+		# Bajado al nivel de la barra inferior de la laptop
+		panel_pos = Vector2(1300.0, 1180.0)
+	elif image_name == "scene7and8.png":
+		# A la izquierda del teléfono con el nombre de Jammy
+		panel_pos = Vector2(960.0, 1040.0)
+	elif image_name == "scene9.png":
+		if speaker.to_lower() == "classmates":
+			# Justo encima de las cabezas de ambos classmates
+			panel_pos = Vector2(1920.0, 1000.0)
+		else:
+			# Sobre la cabeza de Jammy (abajo al centro)
+			panel_pos = Vector2(1340.0, 1340.0)
+	elif image_name == "scene10.png":
+		panel_pos = Vector2(520.0, 940.0)
+		panel_size = Vector2(1100.0, 220.0)
+	elif image_name == "scene11.png":
+		panel_size = Vector2(1180.0, 220.0)
+		if speaker.to_lower() == "xcarlet":
+			# Sobre la cabeza de Xcarlet
+			panel_pos = Vector2(860.0, 1040.0)
+		else:
+			# Sobre la cabeza de Jammy (spoken, narration y mind rojo)
+			panel_pos = Vector2(480.0, 1080.0)
+	elif image_name == "scene12.png":
+		panel_pos = Vector2(1320.0, 1480.0)
+
+	if kind == "prompt":
+		panel_pos = Vector2(1250.0, 920.0)
+		panel_size = Vector2(1340.0, 280.0)
 		dialogue_label.add_theme_font_size_override("font_size", 58)
-		dialogue_label.add_theme_font_override("font", ROCK_SALT_FONT)
-		dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(PANEL_COLOR))
-	elif str(current_entry.get("kind", "")) == "instruction" or str(current_entry.get("kind", "")) == "prompt":
+	elif kind == "instruction":
+		panel_pos = Vector2(1100.0, 860.0)
+		panel_size = Vector2(1640.0, 320.0)
+		dialogue_label.add_theme_font_size_override("font_size", 48)
+	elif is_mind:
+		dialogue_label.add_theme_font_size_override("font_size", 36)
+	else:
+		dialogue_label.add_theme_font_size_override("font_size", 46)
+
+	dialogue_panel.position = panel_pos
+	dialogue_panel.size = panel_size
+	dialogue_label.position = Vector2(44, 24)
+	dialogue_label.size = Vector2(panel_size.x - 88.0, panel_size.y - 48.0)
+
+	if kind == "instruction" or kind == "prompt":
+		speaker_panel.visible = false
 		dialogue_label.add_theme_color_override("font_color", Color("#161616"))
-		dialogue_label.add_theme_font_size_override("font_size", 62)
 		dialogue_label.add_theme_font_override("font", FREDOKA_FONT)
 		dialogue_label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
 		dialogue_label.add_theme_constant_override("shadow_offset_x", 0)
 		dialogue_label.add_theme_constant_override("shadow_offset_y", 0)
-		dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(Color("#fff9f0b8")))
+		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(Color(0.95, 0.94, 0.91, 0.78), Color(0.1, 0.1, 0.1, 0.25)))
+	elif is_black:
+		# En pantallas negras nunca se muestra la pestaña de nombre
+		speaker_panel.visible = false
+		dialogue_label.add_theme_color_override("font_color", MIND_COLOR if is_mind else TEXT_COLOR)
+		dialogue_label.add_theme_font_override("font", ROCK_SALT_FONT if is_mind else FREDOKA_FONT)
+		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(PANEL_COLOR, Color(1.0, 1.0, 1.0, 0.25)))
+	elif is_mind:
+		# Todos los pensamientos rojos van dentro del propio cuadro y pestaña de Jammy
+		dialogue_label.add_theme_color_override("font_color", MIND_COLOR)
+		dialogue_label.add_theme_font_override("font", ROCK_SALT_FONT)
+		var j_border := Color(JAMMY_COLOR.r, JAMMY_COLOR.g, JAMMY_COLOR.b, 0.65)
+		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(MIND_PANEL_COLOR, j_border))
+		speaker_panel.visible = true
+		speaker_panel.position = Vector2(panel_pos.x + 36.0, panel_pos.y - SPEAKER_PANEL_SIZE.y + 2.0)
+		speaker_panel.size = SPEAKER_PANEL_SIZE
+		speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, JAMMY_COLOR))
+		speaker_label.text = "Jammy"
+		speaker_label.add_theme_color_override("font_color", JAMMY_COLOR)
 	else:
 		dialogue_label.add_theme_color_override("font_color", TEXT_COLOR)
-		dialogue_label.add_theme_font_size_override("font_size", 62)
 		dialogue_label.add_theme_font_override("font", FREDOKA_FONT)
-		dialogue_panel.add_theme_stylebox_override("panel", _make_panel_style(PANEL_COLOR))
-	var image_name: String = str(current_entry.get("image", ""))
-	var text: String = str(current_entry.get("text", ""))
-	dialogue_panel.position = Vector2(820, 1580)
-	dialogue_panel.size = DIALOGUE_PANEL_SIZE
-	dialogue_label.size = DIALOGUE_TEXT_SIZE
-	if str(current_entry.get("kind", "")) == "prompt":
-		dialogue_panel.position = Vector2(1120, 900)
-		dialogue_panel.size = Vector2(1600, 360)
-		dialogue_label.size = Vector2(1480, 310)
-		dialogue_label.add_theme_font_size_override("font_size", 72)
-	elif str(current_entry.get("kind", "")) == "instruction":
-		dialogue_panel.position = Vector2(920, 820)
-		dialogue_panel.size = Vector2(2000, 420)
-		dialogue_label.size = Vector2(1880, 370)
-		dialogue_label.add_theme_font_size_override("font_size", 58)
-	if current_entry.get("black", false):
-		dialogue_panel.position = Vector2(1120, 940)
-	if image_name == "scene1_4k.png":
-		dialogue_panel.position = Vector2(1330, 850)
-	elif image_name == "scene2_4k.png":
-		dialogue_panel.position = Vector2(1870, 450)
-	elif image_name == "scene3.png":
-		dialogue_panel.position = Vector2(1120, 1180)
-	elif image_name in ["scene4.png", "scene5.png", "scene6.png"]:
-		dialogue_panel.position = Vector2(1120, 1150)
-	elif image_name == "scene7and8.png":
-		dialogue_panel.position = Vector2(1120, 1250)
-	elif image_name == "scene9.png":
-		dialogue_panel.position = Vector2(1800, 960)
-		if text.begins_with("Yesterday I saw ya"):
-			dialogue_panel.position = Vector2(1800, 960)
-		elif str(current_entry.get("kind", "")) == "mind":
-			dialogue_panel.position = Vector2(1050, 1350)
-	elif image_name == "scene10.png":
-		dialogue_panel.position = Vector2(520, 1020)
-		dialogue_panel.size = Vector2(1200, 260)
-		dialogue_label.size = Vector2(1080, 210)
-	elif image_name == "scene11.png":
-		if str(current_entry.get("speaker", "")) == "xcarlet":
-			dialogue_panel.position = Vector2(1750, 880)
+		if not speaker.is_empty():
+			if speaker.to_lower() == "classmates":
+				var box_border := Color(CLASSMATES_BOX_COLOR.r, CLASSMATES_BOX_COLOR.g, CLASSMATES_BOX_COLOR.b, 0.75)
+				dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(PANEL_COLOR, box_border))
+				speaker_panel.visible = true
+				speaker_panel.position = Vector2(panel_pos.x + 36.0, panel_pos.y - SPEAKER_PANEL_SIZE.y + 2.0)
+				speaker_panel.size = SPEAKER_PANEL_SIZE
+				speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, CLASSMATES_TAB_COLOR))
+				speaker_label.text = "Classmates"
+				speaker_label.add_theme_color_override("font_color", CLASSMATES_TEXT_COLOR)
+			else:
+				var s_color := _get_speaker_color(speaker)
+				var s_border := Color(s_color.r, s_color.g, s_color.b, 0.65)
+				dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(PANEL_COLOR, s_border))
+				speaker_panel.visible = true
+				speaker_panel.position = Vector2(panel_pos.x + 36.0, panel_pos.y - SPEAKER_PANEL_SIZE.y + 2.0)
+				speaker_panel.size = SPEAKER_PANEL_SIZE
+				speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, s_color))
+				speaker_label.text = speaker
+				speaker_label.add_theme_color_override("font_color", s_color)
 		else:
-			dialogue_panel.position = Vector2(650, 880)
-		dialogue_panel.size = Vector2(1450, 320)
-		dialogue_label.size = Vector2(1330, 270)
-	if str(current_entry.get("kind", "")) == "prompt":
-		dialogue_panel.position = Vector2(1120, 900)
-	elif str(current_entry.get("kind", "")) == "instruction":
-		dialogue_panel.position = Vector2(920, 820)
+			speaker_panel.visible = false
+			dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(PANEL_COLOR, Color(1.0, 1.0, 1.0, 0.25)))
 
-func _make_panel_style(color: Color) -> StyleBoxFlat:
+func _make_dialogue_style(bg_color: Color, border_color: Color) -> StyleBoxFlat:
 	var style := StyleBoxFlat.new()
-	style.bg_color = color
+	style.bg_color = bg_color
+	style.corner_radius_top_left = 18
+	style.corner_radius_top_right = 18
+	style.corner_radius_bottom_left = 18
+	style.corner_radius_bottom_right = 18
+	style.border_width_left = 3
+	style.border_width_top = 3
+	style.border_width_right = 3
+	style.border_width_bottom = 3
+	style.border_color = border_color
+	return style
+
+func _make_speaker_style(bg_color: Color, accent_color: Color) -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = bg_color
+	style.corner_radius_top_left = 14
+	style.corner_radius_top_right = 14
+	style.corner_radius_bottom_left = 2
+	style.corner_radius_bottom_right = 2
+	style.border_width_left = 3
+	style.border_width_top = 3
+	style.border_width_right = 3
+	style.border_width_bottom = 0
+	style.border_color = Color(accent_color.r, accent_color.g, accent_color.b, 0.75)
 	return style
 
 func _build_audio() -> void:
@@ -808,9 +974,18 @@ func _update_ambience() -> void:
 	var is_mind: bool = current_entry.get("kind", "") == "mind"
 	var mixing_mode := str(current_entry.get("mixing", ""))
 	var is_focus_sequence: bool = current_entry.get("sequence", false)
+
 	if is_focus_sequence:
 		mind_breath_player.stop()
 		mind_heartbeat_player.stop()
+		if mixing_mode == "start":
+			_start_mixing_game_loop(float(current_entry.get("mixing_start", 0.5)))
+		elif mixing_mode == "stop":
+			_stop_mixing_game_loop()
+		if not mixing_game_active:
+			ambience_player.stop()
+		return
+
 	if mixing_mode == "start":
 		_start_mixing_game_loop(float(current_entry.get("mixing_start", 0.5)))
 	elif mixing_mode == "stop":
@@ -843,9 +1018,11 @@ func _show_ending() -> void:
 	_stop_mixing_game_loop()
 	background.texture = null
 	dialogue_panel.visible = false
+	speaker_panel.visible = false
 	focus_image.visible = false
 	focus_vignette.visible = false
 	focus_instructions.visible = false
 	focus_status.visible = false
 	focus_hint.visible = false
 	continue_label.text = "THE END"
+	continue_label.visible = true
