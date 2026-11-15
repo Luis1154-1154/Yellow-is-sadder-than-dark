@@ -51,11 +51,14 @@ var mind_breath_player: AudioStreamPlayer
 var mind_heartbeat_player: AudioStreamPlayer
 var sonido_esfuerzo: AudioStreamPlayer
 var sonido_corte: AudioStreamPlayer
+var sfx_player: AudioStreamPlayer
 var typewriter_stream: AudioStream
 var breath_stream: AudioStream
 var heartbeat_stream: AudioStream
 var effort_stream: AudioStream
 var cut_stream: AudioStream
+var night_ambience_stream: AudioStream
+var sigh_stream: AudioStream
 
 var entries: Array[Dictionary] = []
 var entry_index := 0
@@ -309,6 +312,8 @@ void fragment() {
 	add_child(sonido_esfuerzo)
 	sonido_corte = AudioStreamPlayer.new()
 	add_child(sonido_corte)
+	sfx_player = AudioStreamPlayer.new()
+	add_child(sfx_player)
 
 func _build_script() -> void:
 	entries = [
@@ -380,7 +385,9 @@ func _build_script() -> void:
 		{"image": "scene11.png", "text": "Yeah, I guess we'll be in the same class.", "instant": false, "kind": "spoken", "speaker": "Jammy", "sequence": true},
 		{"image": "scene11.png", "text": "Then let's head to our classroom!", "instant": false, "kind": "spoken", "speaker": "Xcarlet", "sequence": true},
 		{"image": "scene11.png", "text": "*To be honest, I'm doing pretty well.*", "instant": false, "kind": "narration", "speaker": "Jammy", "sequence": true},
-		{"image": "scene11.png", "text": "*But what if I mess it up by reminding you that you're still you? You were just on autopilot, and from now on you won't be.....realizing you have years ahead to keep up this act, and at this very moment she could notice something and suddenly be scared of you.*", "instant": true, "kind": "mind", "speaker": "Jammy", "mixing": "start", "mixing_start": 5.0, "sequence": true}
+		{"image": "scene11.png", "text": "*But what if I mess it up by reminding you that you're still you? You were just on autopilot, and from now on you won't be.....realizing you have years ahead to keep up this act, and at this very moment she could notice something and suddenly be scared of you.*", "instant": true, "kind": "mind", "speaker": "Jammy", "mixing": "start", "mixing_start": 5.0, "sequence": true},
+		{"image": "scene14.png", "text": "*After that crisis before classes, I feel like I acted so bland and rude to her. I realized I was still the same old me, and that's why I got so tense. The worst part is that I wish I could kiss her, but I'm just a weirdo. Why do I gotta be full of these thoughts right when I'm in front of such a beautiful girl?*", "instant": false, "kind": "narration", "speaker": "Jammy", "mixing": "stop", "sfx": "sigh"},
+		{"image": "scene14.png", "text": "*I'll just close my eyes and imagine something insane but funny.*", "instant": false, "kind": "narration", "speaker": "Jammy"}
 	]
 
 func _fits_in_dialogue_box(candidate: String, font: Font, font_size: int, max_width: float, max_height: float) -> bool:
@@ -420,6 +427,9 @@ func _split_long_dialogues() -> void:
 		elif image_name == "scene10.png":
 			max_width = 990.0
 			max_height = 155.0
+		elif image_name == "scene14.png":
+			max_width = 1210.0
+			max_height = 175.0
 
 		var full_marked: String = _apply_thought_markers(inner_text, has_start_marker, has_end_marker)
 		if _fits_in_dialogue_box(full_marked, font, font_size, max_width, max_height):
@@ -438,6 +448,8 @@ func _split_long_dialogues() -> void:
 				chunk_entry["text"] = _apply_thought_markers(chunk, has_start_marker, false)
 				if not is_first_chunk and str(chunk_entry.get("mixing", "")) == "start":
 					chunk_entry["mixing"] = "keep"
+				if not is_first_chunk and chunk_entry.has("sfx"):
+					chunk_entry.erase("sfx")
 				split_entries.append(chunk_entry)
 				has_start_marker = false
 				is_first_chunk = false
@@ -449,6 +461,8 @@ func _split_long_dialogues() -> void:
 			final_entry["text"] = _apply_thought_markers(chunk, has_start_marker, has_end_marker)
 			if not is_first_chunk and str(final_entry.get("mixing", "")) == "start":
 				final_entry["mixing"] = "keep"
+			if not is_first_chunk and final_entry.has("sfx"):
+				final_entry.erase("sfx")
 			split_entries.append(final_entry)
 	entries = split_entries
 
@@ -478,7 +492,9 @@ func _show_entry() -> void:
 	else:
 		black_background.visible = false
 		background.modulate = Color.WHITE
-		background.texture = load("res://scenes/" + current_entry.image)
+		var img_path := "res://scenes/" + str(current_entry.image)
+		if ResourceLoader.exists(img_path):
+			background.texture = load(img_path)
 		_apply_camera_focus()
 	_update_ambience()
 	_style_dialogue()
@@ -775,26 +791,19 @@ func _style_dialogue() -> void:
 		panel_pos = Vector2(1250.0, 940.0)
 		panel_size = Vector2(1340.0, 250.0)
 	elif image_name == "scene1_4k.png":
-		# Justo sobre la cabeza del Cousin (derecha)
 		panel_pos = Vector2(1620.0, 860.0)
 	elif image_name == "scene2_4k.png":
-		# Centrado sobre la cabeza de Grandma (derecha)
 		panel_pos = Vector2(2080.0, 480.0)
 	elif image_name == "scene3.png":
-		# Centrado en el respaldo del asiento sin tapar la cara de Jammy
 		panel_pos = Vector2(1280.0, 920.0)
 	elif image_name in ["scene4.png", "scene5.png", "scene6.png"]:
-		# Bajado al nivel de la barra inferior de la laptop
 		panel_pos = Vector2(1300.0, 1180.0)
 	elif image_name == "scene7and8.png":
-		# A la izquierda del teléfono con el nombre de Jammy
 		panel_pos = Vector2(960.0, 1040.0)
 	elif image_name == "scene9.png":
 		if speaker.to_lower() == "classmates":
-			# Justo encima de las cabezas de ambos classmates
 			panel_pos = Vector2(1920.0, 1000.0)
 		else:
-			# Sobre la cabeza de Jammy (abajo al centro)
 			panel_pos = Vector2(1340.0, 1340.0)
 	elif image_name == "scene10.png":
 		panel_pos = Vector2(520.0, 940.0)
@@ -802,13 +811,14 @@ func _style_dialogue() -> void:
 	elif image_name == "scene11.png":
 		panel_size = Vector2(1180.0, 220.0)
 		if speaker.to_lower() == "xcarlet":
-			# Sobre la cabeza de Xcarlet
 			panel_pos = Vector2(860.0, 1040.0)
 		else:
-			# Sobre la cabeza de Jammy (spoken, narration y mind rojo)
 			panel_pos = Vector2(480.0, 1080.0)
 	elif image_name == "scene12.png":
 		panel_pos = Vector2(1320.0, 1480.0)
+	elif image_name == "scene14.png":
+		panel_pos = Vector2(1260.0, 480.0)
+		panel_size = Vector2(1320.0, 240.0)
 
 	if kind == "prompt":
 		panel_pos = Vector2(1250.0, 920.0)
@@ -837,13 +847,11 @@ func _style_dialogue() -> void:
 		dialogue_label.add_theme_constant_override("shadow_offset_y", 0)
 		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(Color(0.95, 0.94, 0.91, 0.78), Color(0.1, 0.1, 0.1, 0.25)))
 	elif is_black:
-		# En pantallas negras nunca se muestra la pestaña de nombre
 		speaker_panel.visible = false
 		dialogue_label.add_theme_color_override("font_color", MIND_COLOR if is_mind else TEXT_COLOR)
 		dialogue_label.add_theme_font_override("font", ROCK_SALT_FONT if is_mind else FREDOKA_FONT)
 		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(PANEL_COLOR, Color(1.0, 1.0, 1.0, 0.25)))
 	elif is_mind:
-		# Todos los pensamientos rojos van dentro del propio cuadro y pestaña de Jammy
 		dialogue_label.add_theme_color_override("font_color", MIND_COLOR)
 		dialogue_label.add_theme_font_override("font", ROCK_SALT_FONT)
 		var j_border := Color(JAMMY_COLOR.r, JAMMY_COLOR.g, JAMMY_COLOR.b, 0.65)
@@ -909,12 +917,32 @@ func _make_speaker_style(bg_color: Color, accent_color: Color) -> StyleBoxFlat:
 	style.border_color = Color(accent_color.r, accent_color.g, accent_color.b, 0.75)
 	return style
 
+func _load_first_existing_audio(paths: Array[String]) -> AudioStream:
+	for path in paths:
+		if ResourceLoader.exists(path):
+			return load(path)
+	return null
+
 func _build_audio() -> void:
 	typewriter_stream = NORMAL_DIALOGUE_STREAM
 	breath_stream = BREATHING_STREAM
 	heartbeat_stream = HEARTBEAT_STREAM
 	effort_stream = FOCUS_EFFORT_STREAM
 	cut_stream = _make_tone(0.12, 180.0, 0.32, false)
+
+	night_ambience_stream = _load_first_existing_audio([
+		"res://assets/sounds/crickets-and-distant-owls.mp3",
+		"res://crickets-and-distant-owls.mp3"
+	])
+	sigh_stream = _load_first_existing_audio([
+		"res://assets/sounds/sighs.mp3",
+		"res://assets/sounds/sighs.ogg",
+		"res://assets/sounds/sighs.wav",
+		"res://sighs.mp3",
+		"res://sighs.ogg",
+		"res://sighs.wav"
+	])
+
 	var effort_mp3 := effort_stream as AudioStreamMP3
 	if effort_mp3:
 		effort_mp3.loop = true
@@ -924,26 +952,12 @@ func _build_audio() -> void:
 	var success_mp3 := FOCUS_SUCCESS_STREAM as AudioStreamMP3
 	if success_mp3:
 		success_mp3.loop = false
-
-func _make_key_sound() -> AudioStreamWAV:
-	var rate := 22050
-	var duration := 0.075
-	var samples := int(duration * rate)
-	var data := PackedByteArray()
-	for i in samples:
-		var progress := float(i) / float(samples)
-		var envelope := pow(1.0 - progress, 3.2)
-		var tone := sin(TAU * 880.0 * float(i) / rate) * 0.7
-		tone += sin(TAU * 1320.0 * float(i) / rate) * 0.3
-		var value := int(clamp(tone * envelope * 0.16, -1.0, 1.0) * 32767.0)
-		data.append(value & 0xff)
-		data.append((value >> 8) & 0xff)
-	var stream := AudioStreamWAV.new()
-	stream.format = AudioStreamWAV.FORMAT_16_BITS
-	stream.mix_rate = rate
-	stream.stereo = false
-	stream.data = data
-	return stream
+	var night_mp3 := night_ambience_stream as AudioStreamMP3
+	if night_mp3:
+		night_mp3.loop = true
+	var sigh_mp3 := sigh_stream as AudioStreamMP3
+	if sigh_mp3:
+		sigh_mp3.loop = false
 
 func _make_tone(duration: float, frequency: float, volume: float, looping: bool) -> AudioStreamWAV:
 	var rate := 22050
@@ -965,15 +979,17 @@ func _make_tone(duration: float, frequency: float, volume: float, looping: bool)
 		stream.loop_end = samples
 	return stream
 
-func _make_heartbeat() -> AudioStreamWAV:
-	var stream := _make_tone(1.4, 72.0, 0.22, true)
-	return stream
-
 func _update_ambience() -> void:
 	var image_name: String = str(current_entry.get("image", ""))
 	var is_mind: bool = current_entry.get("kind", "") == "mind"
 	var mixing_mode := str(current_entry.get("mixing", ""))
 	var is_focus_sequence: bool = current_entry.get("sequence", false)
+
+	if str(current_entry.get("sfx", "")) == "sigh" and sigh_stream != null:
+		sfx_player.stop()
+		sfx_player.stream = sigh_stream
+		sfx_player.volume_db = 0.0
+		sfx_player.play()
 
 	if is_focus_sequence:
 		mind_breath_player.stop()
@@ -1002,6 +1018,14 @@ func _update_ambience() -> void:
 			mind_heartbeat_player.stream = heartbeat_stream
 			mind_heartbeat_player.volume_db = 0.0
 			mind_heartbeat_player.play(0.0)
+	elif image_name == "scene14.png":
+		mind_heartbeat_player.stop()
+		mind_breath_player.stop()
+		if night_ambience_stream != null and (ambience_player.stream != night_ambience_stream or not ambience_player.playing):
+			ambience_player.stop()
+			ambience_player.stream = night_ambience_stream
+			ambience_player.volume_db = 0.0
+			ambience_player.play()
 	elif image_name in ["scene10.png", "scene11.png"]:
 		mind_heartbeat_player.stop()
 		if ambience_player.stream != breath_stream or not ambience_player.playing:
@@ -1016,6 +1040,8 @@ func _update_ambience() -> void:
 
 func _show_ending() -> void:
 	_stop_mixing_game_loop()
+	ambience_player.stop()
+	sfx_player.stop()
 	background.texture = null
 	dialogue_panel.visible = false
 	speaker_panel.visible = false
