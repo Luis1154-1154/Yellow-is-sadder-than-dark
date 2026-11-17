@@ -1044,4 +1044,17 @@ func _show_ending() -> void:
 	_stop_mixing_game_loop()
 	ambience_player.stop()
 	sfx_player.stop()
-	get_tree().change_scene_to_file("res://Level2.tscn")
+	
+	var ruta_nivel2 := "res://scenes/Level2.tscn"
+	if not ResourceLoader.exists(ruta_nivel2) and ResourceLoader.exists("res://Level2.tscn"):
+		ruta_nivel2 = "res://Level2.tscn"
+	
+	var eye_trans := get_node_or_null("/root/EyeTransition")
+	if eye_trans == null and ResourceLoader.exists("res://EyeTransition.gd"):
+		eye_trans = load("res://EyeTransition.gd").new()
+		get_tree().root.add_child(eye_trans)
+	
+	if eye_trans != null:
+		eye_trans.ir_a_escena_cerrando_ojos(ruta_nivel2)
+	else:
+		get_tree().change_scene_to_file(ruta_nivel2)
