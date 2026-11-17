@@ -1039,16 +1039,9 @@ func _update_ambience() -> void:
 		mind_breath_player.stop()
 
 func _show_ending() -> void:
+	waiting_for_input = false
+	is_typing = false
 	_stop_mixing_game_loop()
 	ambience_player.stop()
 	sfx_player.stop()
-	background.texture = null
-	dialogue_panel.visible = false
-	speaker_panel.visible = false
-	focus_image.visible = false
-	focus_vignette.visible = false
-	focus_instructions.visible = false
-	focus_status.visible = false
-	focus_hint.visible = false
-	continue_label.text = "THE END"
-	continue_label.visible = true
+	get_tree().change_scene_to_file("res://Level2.tscn")

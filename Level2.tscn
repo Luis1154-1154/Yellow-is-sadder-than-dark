@@ -1,0 +1,8 @@
+[gd_scene format=3 uid="uid://b60bom6igh5uw"]
+
+[ext_resource type="Script" uid="uid://d2sqld016pck6" path="res://Level2.gd" id="1_8mrap"]
+[ext_resource type="Texture2D" uid="uid://dfik74y6eey86" path="res://scenes/completed background1.png" id="2_q04gf"]
+
+[node name="Level2" type="Node2D" unique_id=378528879]
+script = ExtResource("1_8mrap")
+background_texture = ExtResource("2_q04gf")
