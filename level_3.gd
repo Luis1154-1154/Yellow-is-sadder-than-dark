@@ -1,58 +1,275 @@
 extends Node2D
 
-const BASE_SIZE := Vector2(3840.0, 2160.0)
-const JAMMY_COLOR := Color("#f5d08a")
-const XCARLET_COLOR := Color("#5bc0eb")
-const JAMMY_INK := Color("#2a2b30")
-const XCARLET_INK := Color("#3aa8db")
-const TEXT_COLOR := Color("#fff9f0")
-const PANEL_COLOR := Color(0.22, 0.23, 0.25, 0.72)
-const SPEAKER_BG_COLOR := Color(0.18, 0.19, 0.21, 0.85)
+const BASE_SIZE: Vector2 = Vector2(3840.0, 2160.0)
+const CHARS_DIR: String = "res://assets/characters/"
+const PENCIL_SOUND_PATH: String = "res://assets/sounds/pencil.wav"
 
-const PAPER_RECT := Rect2(Vector2(720.0, 170.0), Vector2(2400.0, 1680.0))
+# Paleta y medidas homogenizadas (con alto contraste sobre el papel blanco de este nivel)
+const JAMMY_COLOR: Color = Color("#f5d08a")
+const XCARLET_COLOR: Color = Color("#5bc0eb")
+const MIND_COLOR: Color = Color("#ff5a5f")
+const NORMAL_BLACK_TEXT_COLOR: Color = Color("#161616")
+const NORMAL_WHITE_PANEL_COLOR: Color = Color(0.97, 0.96, 0.94, 0.94)
+const MIND_PANEL_COLOR: Color = Color(0.11, 0.11, 0.13, 0.94)
+const SPEAKER_BG_COLOR: Color = Color(0.14, 0.15, 0.17, 0.94)
+
+const DIALOGUE_PANEL_SIZE: Vector2 = Vector2(1280.0, 240.0)
+const DIALOGUE_PANEL_POS: Vector2 = Vector2(1280.0, 1835.0)
+const TOC_PANEL_POS: Vector2 = Vector2(72.0, 56.0)
+const SPEAKER_PANEL_SIZE: Vector2 = Vector2(300.0, 62.0)
+
+# Brazo escalado para cubrir todo el lienzo incluso con zoom sin cortar la manga
+const HAND_SIZE: Vector2 = Vector2(5600.0, 3150.0)
+const JAMMY_TIP_UV: Vector2 = Vector2(0.812, 0.186)
+const XCARLET_TIP_UV: Vector2 = Vector2(0.838, 0.126)
+const HAND_OFFSCREEN_POS: Vector2 = Vector2(-3100.0, 2900.0)
+
+# Máscara de alta definición para revelado limpio
+const MASK_SIZE: Vector2i = Vector2i(1280, 720)
+
+# Parámetros de dificultad
+const MIN_ACCURACY: float = 80.0
+const SNAP_MAX_DIST: float = 18.0
+const STEP_MAX_DIST: float = 17.0
+const OFF_PATH_ZERO_DIST: float = 30.0
+const MIN_COVERAGE_RATIO: float = 0.95
+
+@export_file("*.tscn") var next_scene_path: String = "res://scenes/scene17.tscn"
 
 var ui_root: Control
-var paper_panel: Panel
-var strokes_container: Node2D
-var cursor_dot: ColorRect
-var pass_turn_button: Button
-var controls_label: Label
+var canvas_container: Control
+var base_art_rect: TextureRect
+var reveal_art_rect: TextureRect
+var reveal_material: ShaderMaterial
+var guide_canvas: Control
 
+var jammy_hand_rect: TextureRect
+var xcarlet_hand_rect: TextureRect
+
+# Barra Kawaii de Accuracy (arriba a la derecha)
+var kawaii_panel: Panel
+var kawaii_title_label: Label
+var kawaii_percent_label: Label
+var kawaii_bar_bg: Panel
+var kawaii_bar_fill: ColorRect
+var kawaii_threshold_mark: ColorRect
+
+# Cuadro rojo del TOC con tres puntos fijos centrados (mismo tamaño que el cuadro de diálogo)
+var thought_dots_panel: Panel
+var thought_dots_label: Label
+var thought_dots_tween: Tween
+
+# Cartel blanco de instrucciones homogenizado
+var instruction_panel: Panel
+var instruction_label: RichTextLabel
+
+# Cuadro de diálogo homogenizado
 var dialogue_panel: Panel
 var dialogue_label: Label
 var speaker_panel: Panel
 var speaker_label: Label
 
 var pencil_player: AudioStreamPlayer
-var pencil_stream: AudioStream
 var fredoka_font: Font
 var rock_salt_font: Font
+var pencil_stream: AudioStream
 
-var current_line: Line2D = null
-var stroke_start_point := Vector2.ZERO
-var is_drawing := false
-var is_xcarlet_turn := false
-var stroke_step_counter := 0
-var jammy_brush_width := 8.0
+var cached_char_files: PackedStringArray = PackedStringArray()
 
-var all_strokes: Array[Line2D] = []
-var pending_jammy_strokes: Array[Line2D] = []
+# Texturas cargadas
+var tex_xcarlet_1: TextureRect
+var tex_jammy_1: Texture2D
+var tex_xcarlet_2: Texture2D
+var tex_jammy_2: Texture2D
+var tex_xcarlet_3: Texture2D
+var tex_jammy_3: Texture2D
+var tex_both: Texture2D
+var tex_xcarlet_1_tex: Texture2D
+
+# Máscara dinámica de opacidad
+var mask_image: Image
+var mask_texture: ImageTexture
+var mask_snapshot: PackedByteArray
+
+enum Phase {
+	AUTO_XCARLET_1,
+	WAIT_AFTER_XCARLET_1,
+	SHOW_INSTRUCTIONS,
+	JAMMY_1_CHAIN,
+	AUTO_XCARLET_2,
+	WAIT_AFTER_XCARLET_2,
+	JAMMY_2_WOUND_DROPS_PUDDLE,
+	AUTO_XCARLET_3,
+	WAIT_AFTER_XCARLET_3,
+	JAMMY_3_KNIFE_CUTS,
+	WAIT_KNIFE_XCARLET_REACTION,
+	WAIT_KNIFE_JAMMY_RESPONSE,
+	JAMMY_4_BOTH_SIGNATURE,
+	WAIT_DELAYED_DIALOGUES,
+	FINISHED
+}
+
+var current_phase: Phase = Phase.AUTO_XCARLET_1
+var delayed_return_phase: Phase = Phase.JAMMY_1_CHAIN
+var jammy_strokes_queue: Array[Dictionary] = []
+var current_stroke_idx: int = 0
+
+# Cola de cuadros de diálogo divididos (evita desbordamientos y conserva diálogos atrasados)
+var dialogue_queue: Array[Dictionary] = []
+var dialogue_queue_idx: int = 0
+
+# Control bidireccional desde cualquier extremo/punto sobre la línea punteada
+var active_guide_points: PackedVector2Array = PackedVector2Array()
+var guide_covered: Array[bool] = []
+var is_closed_loop: bool = false
+var current_anchor_idx: int = -1
+var guide_pulse_time: float = 0.0
+
+var is_player_tracing: bool = false
+var has_last_sample_pos: bool = false
+var last_sample_pos: Vector2 = Vector2.ZERO
+var sample_scores: Array[float] = []
+
+# Control fluido del sonido del lápiz sin cortes ni golpeteos
+var is_pencil_actively_drawing: bool = false
+var pencil_idle_timer: float = 0.0
+
+# Estado de zoom de cámara sobre el lienzo
+var current_zoom: float = 1.0
+var zoom_tween: Tween
 
 
 func _ready() -> void:
 	name = "Level3"
-	_load_resources()
+	_scan_characters_directory()
+	_load_all_assets()
 	_build_ui()
-	_show_dialogue("Xcarlet", "Draw a landscape, a character, or a half-shape—I'll match your vibe! Press ENTER when it's my turn.", XCARLET_COLOR)
+	_start_phase(Phase.AUTO_XCARLET_1)
 
 
-func _load_resources() -> void:
+func _scan_characters_directory() -> void:
+	cached_char_files.clear()
+	var dir: DirAccess = DirAccess.open(CHARS_DIR)
+	if dir == null:
+		push_warning("No se pudo abrir la carpeta: " + CHARS_DIR)
+		return
+
+	dir.list_dir_begin()
+	var file_name: String = dir.get_next()
+	while file_name != "":
+		if not dir.current_is_dir() and not file_name.ends_with(".import"):
+			cached_char_files.append(file_name)
+		file_name = dir.get_next()
+	dir.list_dir_end()
+
+
+func _normalize_key(raw: String) -> String:
+	var s: String = raw.get_basename().to_lower()
+	s = s.replace("'", "").replace("’", "").replace(" ", "").replace("_", "").replace("-", "")
+	return s
+
+
+func _load_all_assets() -> void:
 	if ResourceLoader.exists("res://fonts/Fredoka-Regular.ttf"):
 		fredoka_font = load("res://fonts/Fredoka-Regular.ttf")
 	if ResourceLoader.exists("res://fonts/RockSalt-Regular.ttf"):
 		rock_salt_font = load("res://fonts/RockSalt-Regular.ttf")
-	if ResourceLoader.exists("res://assets/sounds/Soft_pencil_tap_on_n_#1-1794378651940.mp3"):
-		pencil_stream = load("res://assets/sounds/Soft_pencil_tap_on_n_#1-1794378651940.mp3")
+
+	if ResourceLoader.exists(PENCIL_SOUND_PATH):
+		pencil_stream = load(PENCIL_SOUND_PATH)
+	elif ResourceLoader.exists("res://assets/sounds/pencil.ogg"):
+		pencil_stream = load("res://assets/sounds/pencil.ogg")
+	elif ResourceLoader.exists("res://assets/sounds/pencil.mp3"):
+		pencil_stream = load("res://assets/sounds/pencil.mp3")
+
+	tex_xcarlet_1_tex = _load_character_art(["xcarlet'sStroke1", "xcarletsstroke1"])
+	tex_jammy_1 = _load_character_art(["Jammy'sStroke1", "jammysstroke1"])
+	tex_xcarlet_2 = _load_character_art(["xcarlet'sStroke2", "xcarletsstroke2"])
+	tex_jammy_2 = _load_character_art(["jammy'sStroke2", "jammysstroke2"])
+	tex_xcarlet_3 = _load_character_art(["xcarlet'sStroke3", "xcarletsstroke3"])
+	tex_jammy_3 = _load_character_art(["jammy'sStroke3", "jammysstroke3"])
+	tex_both = _load_character_art(["both"])
+
+
+func _load_character_art(candidate_names: Array) -> Texture2D:
+	var exts: Array[String] = [".png", ".jpg", ".jpeg", ".webp"]
+	for raw_name in candidate_names:
+		var b: String = str(raw_name)
+		for ext: String in exts:
+			var full: String = CHARS_DIR + b + ext
+			if ResourceLoader.exists(full):
+				return load(full)
+
+	for raw_name in candidate_names:
+		var target_key: String = _normalize_key(str(raw_name))
+		for file_name: String in cached_char_files:
+			if _normalize_key(file_name) == target_key:
+				var full_path: String = CHARS_DIR + file_name
+				if ResourceLoader.exists(full_path):
+					return load(full_path)
+
+	push_warning("Falta archivo en " + CHARS_DIR + ": " + str(candidate_names))
+	return null
+
+
+func _load_hand_texture_sharp(candidate_names: Array) -> Texture2D:
+	var tex: Texture2D = _load_character_art(candidate_names)
+	if tex == null:
+		return null
+
+	var img: Image = tex.get_image()
+	if img == null:
+		return tex
+
+	if img.detect_alpha() != Image.ALPHA_NONE:
+		return tex
+
+	if img.is_compressed():
+		img.decompress()
+	img.convert(Image.FORMAT_RGBA8)
+
+	var w: int = img.get_width()
+	var h: int = img.get_height()
+	var visited: PackedByteArray = PackedByteArray()
+	visited.resize(w * h)
+
+	var queue: Array[Vector2i] = []
+	for x: int in range(w):
+		for y: int in [0, h - 1]:
+			var idx: int = y * w + x
+			if visited[idx] == 0:
+				visited[idx] = 1
+				queue.append(Vector2i(x, y))
+	for y: int in range(h):
+		for x: int in [0, w - 1]:
+			var idx: int = y * w + x
+			if visited[idx] == 0:
+				visited[idx] = 1
+				queue.append(Vector2i(x, y))
+
+	var head: int = 0
+	while head < queue.size():
+		var p: Vector2i = queue[head]
+		head += 1
+
+		var col: Color = img.get_pixel(p.x, p.y)
+		var lum: float = maxf(col.r, maxf(col.g, col.b))
+		if lum < 0.05:
+			img.set_pixel(p.x, p.y, Color(0.0, 0.0, 0.0, 0.0))
+			var neighbors: Array[Vector2i] = [
+				Vector2i(p.x + 1, p.y),
+				Vector2i(p.x - 1, p.y),
+				Vector2i(p.x, p.y + 1),
+				Vector2i(p.x, p.y - 1)
+			]
+			for n: Vector2i in neighbors:
+				if n.x >= 0 and n.x < w and n.y >= 0 and n.y < h:
+					var n_idx: int = n.y * w + n.x
+					if visited[n_idx] == 0:
+						visited[n_idx] = 1
+						queue.append(n)
+
+	return ImageTexture.create_from_image(img)
 
 
 func _build_ui() -> void:
@@ -60,85 +277,278 @@ func _build_ui() -> void:
 	ui_root.position = Vector2.ZERO
 	ui_root.size = BASE_SIZE
 	ui_root.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.clip_contents = true
 	add_child(ui_root)
 
-	var desk_bg := ColorRect.new()
-	desk_bg.position = Vector2.ZERO
-	desk_bg.size = BASE_SIZE
-	desk_bg.color = Color("#7a4b2a")
-	desk_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui_root.add_child(desk_bg)
+	canvas_container = Control.new()
+	canvas_container.position = Vector2.ZERO
+	canvas_container.size = BASE_SIZE
+	canvas_container.scale = Vector2.ONE
+	canvas_container.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	ui_root.add_child(canvas_container)
 
-	var paper_shadow := ColorRect.new()
-	paper_shadow.position = PAPER_RECT.position + Vector2(22.0, 26.0)
-	paper_shadow.size = PAPER_RECT.size
-	paper_shadow.color = Color(0.0, 0.0, 0.0, 0.35)
-	paper_shadow.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui_root.add_child(paper_shadow)
+	base_art_rect = TextureRect.new()
+	base_art_rect.position = Vector2.ZERO
+	base_art_rect.size = BASE_SIZE
+	base_art_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	base_art_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	base_art_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas_container.add_child(base_art_rect)
 
-	paper_panel = Panel.new()
-	paper_panel.position = PAPER_RECT.position
-	paper_panel.size = PAPER_RECT.size
-	paper_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	var paper_style := StyleBoxFlat.new()
-	paper_style.bg_color = Color("#fbf8f1")
-	paper_style.set_corner_radius_all(8)
-	paper_style.set_border_width_all(4)
-	paper_style.border_color = Color("#ded8ca")
-	paper_panel.add_theme_stylebox_override("panel", paper_style)
-	ui_root.add_child(paper_panel)
+	reveal_art_rect = TextureRect.new()
+	reveal_art_rect.position = Vector2.ZERO
+	reveal_art_rect.size = BASE_SIZE
+	reveal_art_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	reveal_art_rect.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
+	reveal_art_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	canvas_container.add_child(reveal_art_rect)
 
-	strokes_container = Node2D.new()
-	strokes_container.z_index = 5
-	add_child(strokes_container)
+	mask_image = Image.create(MASK_SIZE.x, MASK_SIZE.y, false, Image.FORMAT_RGBA8)
+	mask_image.fill(Color(0.0, 0.0, 0.0, 1.0))
+	mask_texture = ImageTexture.create_from_image(mask_image)
 
-	cursor_dot = ColorRect.new()
-	cursor_dot.size = Vector2(12.0, 12.0)
-	cursor_dot.color = JAMMY_INK
-	cursor_dot.z_index = 8
-	cursor_dot.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	ui_root.add_child(cursor_dot)
+	var reveal_shader: Shader = Shader.new()
+	reveal_shader.code = """
+shader_type canvas_item;
+uniform sampler2D mask_tex;
+uniform bool preserve_paper_bg = false;
 
-	controls_label = Label.new()
-	controls_label.position = Vector2(PAPER_RECT.position.x, 75.0)
-	controls_label.size = Vector2(1720.0, 70.0)
-	controls_label.text = "[PEN/CLICK] Draw  |  [1/2/3] Size  |  [SHIFT] Line  |  [Z/R-CLICK] Undo  |  [C] Clear"
-	controls_label.add_theme_font_size_override("font_size", 32)
+void fragment() {
+	vec4 base_col = texture(TEXTURE, UV);
+	float m = texture(mask_tex, UV).r;
+	if (preserve_paper_bg) {
+		bool inside_heart = (UV.x >= 0.375 && UV.x <= 0.580 && UV.y >= 0.335 && UV.y <= 0.665);
+		if (!inside_heart) {
+			COLOR = base_col;
+		} else {
+			COLOR = vec4(mix(vec3(1.0, 1.0, 1.0), base_col.rgb, m), base_col.a);
+		}
+	} else {
+		COLOR = vec4(base_col.rgb, base_col.a * m);
+	}
+}
+"""
+	reveal_material = ShaderMaterial.new()
+	reveal_material.shader = reveal_shader
+	reveal_material.set_shader_parameter("mask_tex", mask_texture)
+	reveal_material.set_shader_parameter("preserve_paper_bg", false)
+	reveal_art_rect.material = reveal_material
+
+	guide_canvas = Control.new()
+	guide_canvas.position = Vector2.ZERO
+	guide_canvas.size = BASE_SIZE
+	guide_canvas.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	guide_canvas.z_index = 4
+	guide_canvas.draw.connect(_on_guide_canvas_draw)
+	canvas_container.add_child(guide_canvas)
+
+	xcarlet_hand_rect = TextureRect.new()
+	xcarlet_hand_rect.size = HAND_SIZE
+	xcarlet_hand_rect.position = HAND_OFFSCREEN_POS
+	xcarlet_hand_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	xcarlet_hand_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	xcarlet_hand_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	xcarlet_hand_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	xcarlet_hand_rect.z_index = 8
+	xcarlet_hand_rect.visible = false
+	xcarlet_hand_rect.texture = _load_hand_texture_sharp(["brazoXcarlet"])
+	ui_root.add_child(xcarlet_hand_rect)
+
+	jammy_hand_rect = TextureRect.new()
+	jammy_hand_rect.size = HAND_SIZE
+	jammy_hand_rect.position = HAND_OFFSCREEN_POS
+	jammy_hand_rect.expand_mode = TextureRect.EXPAND_IGNORE_SIZE
+	jammy_hand_rect.stretch_mode = TextureRect.STRETCH_SCALE
+	jammy_hand_rect.texture_filter = CanvasItem.TEXTURE_FILTER_LINEAR
+	jammy_hand_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	jammy_hand_rect.z_index = 8
+	jammy_hand_rect.visible = false
+	jammy_hand_rect.texture = _load_hand_texture_sharp(["brazoJammy"])
+	ui_root.add_child(jammy_hand_rect)
+
+	_build_kawaii_accuracy_bar()
+	_build_thought_dots_badge()
+	_build_homogenized_boxes()
+
+	pencil_player = AudioStreamPlayer.new()
+	pencil_player.volume_db = 0.0
+	pencil_player.finished.connect(_on_pencil_player_finished)
+	add_child(pencil_player)
+
+
+func _build_kawaii_accuracy_bar() -> void:
+	kawaii_panel = Panel.new()
+	kawaii_panel.position = Vector2(3030.0, 56.0)
+	kawaii_panel.size = Vector2(730.0, 150.0)
+	kawaii_panel.z_index = 14
+	kawaii_panel.visible = false
+
+	var k_style: StyleBoxFlat = StyleBoxFlat.new()
+	k_style.bg_color = Color("#fff5f8")
+	k_style.border_color = Color("#ff8fb1")
+	k_style.set_border_width_all(5)
+	k_style.set_corner_radius_all(28)
+	k_style.shadow_color = Color(0.95, 0.45, 0.65, 0.35)
+	k_style.shadow_size = 10
+	kawaii_panel.add_theme_stylebox_override("panel", k_style)
+	ui_root.add_child(kawaii_panel)
+
+	kawaii_title_label = Label.new()
+	kawaii_title_label.position = Vector2(28.0, 14.0)
+	kawaii_title_label.size = Vector2(440.0, 48.0)
+	kawaii_title_label.text = "♡ ACCURACY ♡"
+	kawaii_title_label.add_theme_font_size_override("font_size", 34)
 	if fredoka_font:
-		controls_label.add_theme_font_override("font", fredoka_font)
-	controls_label.add_theme_color_override("font_color", TEXT_COLOR)
-	controls_label.add_theme_color_override("font_shadow_color", Color("#000000cc"))
-	controls_label.add_theme_constant_override("shadow_offset_x", 3)
-	controls_label.add_theme_constant_override("shadow_offset_y", 3)
-	ui_root.add_child(controls_label)
+		kawaii_title_label.add_theme_font_override("font", fredoka_font)
+	kawaii_title_label.add_theme_color_override("font_color", Color("#d94e78"))
+	kawaii_panel.add_child(kawaii_title_label)
 
-	pass_turn_button = Button.new()
-	pass_turn_button.position = Vector2(PAPER_RECT.end.x - 640.0, 62.0)
-	pass_turn_button.size = Vector2(640.0, 84.0)
-	pass_turn_button.text = "Let Xcarlet Complete [ENTER]"
-	pass_turn_button.add_theme_font_size_override("font_size", 35)
+	kawaii_percent_label = Label.new()
+	kawaii_percent_label.position = Vector2(490.0, 10.0)
+	kawaii_percent_label.size = Vector2(210.0, 54.0)
+	kawaii_percent_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_RIGHT
+	kawaii_percent_label.text = "100% ★"
+	kawaii_percent_label.add_theme_font_size_override("font_size", 38)
 	if fredoka_font:
-		pass_turn_button.add_theme_font_override("font", fredoka_font)
-	var btn_style := StyleBoxFlat.new()
-	btn_style.bg_color = Color(0.16, 0.22, 0.28, 0.92)
-	btn_style.border_color = XCARLET_COLOR
-	btn_style.set_border_width_all(3)
-	btn_style.set_corner_radius_all(14)
-	pass_turn_button.add_theme_stylebox_override("normal", btn_style)
-	pass_turn_button.add_theme_color_override("font_color", XCARLET_COLOR)
-	pass_turn_button.pressed.connect(_on_pass_turn_pressed)
-	ui_root.add_child(pass_turn_button)
+		kawaii_percent_label.add_theme_font_override("font", fredoka_font)
+	kawaii_percent_label.add_theme_color_override("font_color", Color("#d94e78"))
+	kawaii_panel.add_child(kawaii_percent_label)
 
+	kawaii_bar_bg = Panel.new()
+	kawaii_bar_bg.position = Vector2(28.0, 74.0)
+	kawaii_bar_bg.size = Vector2(674.0, 48.0)
+	var bg_s: StyleBoxFlat = StyleBoxFlat.new()
+	bg_s.bg_color = Color("#ffe3ec")
+	bg_s.border_color = Color("#ffb3c6")
+	bg_s.set_border_width_all(3)
+	bg_s.set_corner_radius_all(22)
+	kawaii_bar_bg.add_theme_stylebox_override("panel", bg_s)
+	kawaii_panel.add_child(kawaii_bar_bg)
+
+	kawaii_bar_fill = ColorRect.new()
+	kawaii_bar_fill.position = Vector2(6.0, 6.0)
+	kawaii_bar_fill.size = Vector2(662.0, 36.0)
+	kawaii_bar_fill.color = Color("#ff85a1")
+	kawaii_bar_bg.add_child(kawaii_bar_fill)
+
+	kawaii_threshold_mark = ColorRect.new()
+	kawaii_threshold_mark.position = Vector2(6.0 + 662.0 * (MIN_ACCURACY / 100.0), 0.0)
+	kawaii_threshold_mark.size = Vector2(6.0, 48.0)
+	kawaii_threshold_mark.color = Color("#6b1128")
+	kawaii_bar_bg.add_child(kawaii_threshold_mark)
+
+
+func _build_thought_dots_badge() -> void:
+	# Mismo tamaño exacto que el cuadro de diálogo (1280 x 240)
+	thought_dots_panel = Panel.new()
+	thought_dots_panel.position = DIALOGUE_PANEL_POS
+	thought_dots_panel.size = DIALOGUE_PANEL_SIZE
+	thought_dots_panel.z_index = 16
+	thought_dots_panel.visible = false
+	thought_dots_panel.add_theme_stylebox_override(
+		"panel",
+		_make_dialogue_style(MIND_PANEL_COLOR, Color(MIND_COLOR.r, MIND_COLOR.g, MIND_COLOR.b, 0.88))
+	)
+	ui_root.add_child(thought_dots_panel)
+
+	# Los tres puntos fijos (sin moverse) centrados exactamente en medio del cuadro
+	thought_dots_label = Label.new()
+	thought_dots_label.position = Vector2(44.0, 24.0)
+	thought_dots_label.size = Vector2(DIALOGUE_PANEL_SIZE.x - 88.0, DIALOGUE_PANEL_SIZE.y - 48.0)
+	thought_dots_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	thought_dots_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	thought_dots_label.text = "..."
+	thought_dots_label.add_theme_font_size_override("font_size", 48)
+	if rock_salt_font:
+		thought_dots_label.add_theme_font_override("font", rock_salt_font)
+	elif fredoka_font:
+		thought_dots_label.add_theme_font_override("font", fredoka_font)
+	thought_dots_label.add_theme_color_override("font_color", MIND_COLOR)
+	thought_dots_label.add_theme_color_override("font_shadow_color", Color("#000000e6"))
+	thought_dots_label.add_theme_constant_override("shadow_offset_x", 3)
+	thought_dots_label.add_theme_constant_override("shadow_offset_y", 3)
+	thought_dots_panel.add_child(thought_dots_label)
+
+
+func _show_thought_dots_from_jammy() -> void:
+	if thought_dots_tween != null and thought_dots_tween.is_valid():
+		thought_dots_tween.kill()
+
+	# Inicia exactamente sobre el cuadro de diálogo de Jammy con el mismo tamaño (1280x240)
+	thought_dots_panel.size = DIALOGUE_PANEL_SIZE
+	thought_dots_panel.position = DIALOGUE_PANEL_POS
+	thought_dots_panel.scale = Vector2.ONE
+	thought_dots_panel.modulate.a = 1.0
+	thought_dots_label.text = "..."
+	thought_dots_panel.visible = true
+
+	# Pausa breve para que se note el cuadro rojo sobre el de Jammy antes de separarse
+	await get_tree().create_timer(0.18).timeout
+
+	thought_dots_tween = create_tween()
+	thought_dots_tween.set_trans(Tween.TRANS_CUBIC)
+	thought_dots_tween.set_ease(Tween.EASE_OUT)
+	thought_dots_tween.tween_property(thought_dots_panel, "position", TOC_PANEL_POS, 0.75)
+	await thought_dots_tween.finished
+
+
+func _hide_thought_dots_badge() -> void:
+	if not thought_dots_panel.visible:
+		return
+	if thought_dots_tween != null and thought_dots_tween.is_valid():
+		thought_dots_tween.kill()
+
+	thought_dots_tween = create_tween()
+	thought_dots_tween.set_trans(Tween.TRANS_CUBIC)
+	thought_dots_tween.set_ease(Tween.EASE_IN)
+	thought_dots_tween.tween_property(thought_dots_panel, "modulate:a", 0.0, 0.30)
+	await thought_dots_tween.finished
+	thought_dots_panel.visible = false
+	thought_dots_panel.modulate.a = 1.0
+
+
+func _build_homogenized_boxes() -> void:
+	# Cartel blanco de instrucciones con alta opacidad para evitar cruce con el papel
+	instruction_panel = Panel.new()
+	instruction_panel.position = Vector2(1100.0, 860.0)
+	instruction_panel.size = Vector2(1640.0, 320.0)
+	instruction_panel.z_index = 18
+	instruction_panel.visible = false
+	instruction_panel.add_theme_stylebox_override(
+		"panel",
+		_make_dialogue_style(NORMAL_WHITE_PANEL_COLOR, Color(0.1, 0.1, 0.1, 0.35))
+	)
+	ui_root.add_child(instruction_panel)
+
+	instruction_label = RichTextLabel.new()
+	instruction_label.position = Vector2(44.0, 24.0)
+	instruction_label.size = Vector2(1552.0, 272.0)
+	instruction_label.bbcode_enabled = true
+	instruction_label.scroll_active = false
+	instruction_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	instruction_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	instruction_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	instruction_label.add_theme_font_size_override("normal_font_size", 46)
+	if fredoka_font:
+		instruction_label.add_theme_font_override("normal_font", fredoka_font)
+	instruction_label.add_theme_color_override("default_color", NORMAL_BLACK_TEXT_COLOR)
+	instruction_panel.add_child(instruction_label)
+
+	# Cuadro de diálogo estándar homogenizado (1280x240)
 	dialogue_panel = Panel.new()
-	dialogue_panel.position = Vector2(1120.0, 1900.0)
-	dialogue_panel.size = Vector2(1600.0, 195.0)
+	dialogue_panel.position = DIALOGUE_PANEL_POS
+	dialogue_panel.size = DIALOGUE_PANEL_SIZE
 	dialogue_panel.z_index = 10
-	dialogue_panel.add_theme_stylebox_override("panel", _make_box_style(PANEL_COLOR, XCARLET_COLOR))
+	dialogue_panel.add_theme_stylebox_override(
+		"panel",
+		_make_dialogue_style(NORMAL_WHITE_PANEL_COLOR, Color(XCARLET_COLOR.r, XCARLET_COLOR.g, XCARLET_COLOR.b, 0.85))
+	)
 	ui_root.add_child(dialogue_panel)
 
+	# Pestaña de personaje homogenizada (300x62) con fondo oscuro sólido para alto contraste
 	speaker_panel = Panel.new()
-	speaker_panel.position = Vector2(1156.0, 1842.0)
-	speaker_panel.size = Vector2(300.0, 60.0)
+	speaker_panel.position = Vector2(DIALOGUE_PANEL_POS.x + 36.0, DIALOGUE_PANEL_POS.y - SPEAKER_PANEL_SIZE.y + 2.0)
+	speaker_panel.size = SPEAKER_PANEL_SIZE
 	speaker_panel.z_index = 11
 	speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, XCARLET_COLOR))
 	ui_root.add_child(speaker_panel)
@@ -147,588 +557,1357 @@ func _build_ui() -> void:
 	speaker_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	speaker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	speaker_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	speaker_label.add_theme_font_size_override("font_size", 34)
+	speaker_label.add_theme_font_size_override("font_size", 36)
 	if fredoka_font:
 		speaker_label.add_theme_font_override("font", fredoka_font)
 	speaker_label.add_theme_color_override("font_color", XCARLET_COLOR)
+	speaker_label.add_theme_color_override("font_shadow_color", Color("#000000e6"))
+	speaker_label.add_theme_constant_override("shadow_offset_x", 2)
+	speaker_label.add_theme_constant_override("shadow_offset_y", 2)
 	speaker_panel.add_child(speaker_label)
 
 	dialogue_label = Label.new()
-	dialogue_label.position = Vector2(40.0, 20.0)
-	dialogue_label.size = Vector2(1520.0, 155.0)
+	dialogue_label.position = Vector2(44.0, 20.0)
+	dialogue_label.size = Vector2(DIALOGUE_PANEL_SIZE.x - 88.0, DIALOGUE_PANEL_SIZE.y - 40.0)
 	dialogue_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	dialogue_label.clip_text = true
 	dialogue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	dialogue_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	dialogue_label.add_theme_font_size_override("font_size", 42)
+	dialogue_label.add_theme_font_size_override("font_size", 46)
 	if fredoka_font:
 		dialogue_label.add_theme_font_override("font", fredoka_font)
-	dialogue_label.add_theme_color_override("font_color", TEXT_COLOR)
+	dialogue_label.add_theme_color_override("font_color", NORMAL_BLACK_TEXT_COLOR)
 	dialogue_panel.add_child(dialogue_label)
 
-	pencil_player = AudioStreamPlayer.new()
-	pencil_player.volume_db = -4.0
-	add_child(pencil_player)
+
+func _show_white_instruction(bbcode_text: String, compact_above_dialogue: bool = false) -> void:
+	if compact_above_dialogue:
+		instruction_panel.position = Vector2(1280.0, 1595.0)
+		instruction_panel.size = Vector2(1280.0, 140.0)
+		instruction_label.position = Vector2(44.0, 18.0)
+		instruction_label.size = Vector2(1192.0, 104.0)
+		instruction_label.add_theme_font_size_override("normal_font_size", 44)
+	else:
+		instruction_panel.position = Vector2(1100.0, 860.0)
+		instruction_panel.size = Vector2(1640.0, 320.0)
+		instruction_label.position = Vector2(44.0, 24.0)
+		instruction_label.size = Vector2(1552.0, 272.0)
+		instruction_label.add_theme_font_size_override("normal_font_size", 48)
+
+	instruction_label.text = bbcode_text
+	instruction_panel.visible = true
 
 
-func _process(_delta: float) -> void:
-	var m_pos := get_global_mouse_position()
-	cursor_dot.size = Vector2.ONE * maxf(jammy_brush_width + 4.0, 8.0)
-	cursor_dot.position = m_pos - cursor_dot.size * 0.5
-	cursor_dot.visible = PAPER_RECT.has_point(m_pos) and not is_xcarlet_turn
+func _update_dialogue_prompt(is_blocking_wait: bool) -> void:
+	if _has_more_dialogues():
+		_show_white_instruction("[center]Press [lb]ENTER[rb] to move to the next dialogue.[/center]", true)
+	elif is_blocking_wait:
+		_show_white_instruction("[center]Press [lb]ENTER[rb] to continue.[/center]", true)
+	else:
+		instruction_panel.visible = false
+
+
+# ==============================================================================
+# CONTROL DE ZOOM SUAVE SOBRE EL ÁREA A CONTORNEAR Y RELEASE A 1.0x
+# ==============================================================================
+func _set_camera_zoom(target_scale: float, focus_norm: Vector2, duration: float = 0.55) -> void:
+	if zoom_tween != null and zoom_tween.is_valid():
+		zoom_tween.kill()
+
+	var clamped_scale: float = clampf(target_scale, 1.0, 3.2)
+	var target_pos: Vector2 = Vector2.ZERO
+
+	if clamped_scale > 1.001:
+		var focus_px: Vector2 = Vector2(focus_norm.x * BASE_SIZE.x, focus_norm.y * BASE_SIZE.y)
+		var screen_anchor: Vector2 = Vector2(BASE_SIZE.x * 0.50, BASE_SIZE.y * 0.45)
+		target_pos = screen_anchor - focus_px * clamped_scale
+		target_pos.x = clampf(target_pos.x, BASE_SIZE.x * (1.0 - clamped_scale), 0.0)
+		target_pos.y = clampf(target_pos.y, BASE_SIZE.y * (1.0 - clamped_scale), 0.0)
+
+	zoom_tween = create_tween()
+	zoom_tween.set_parallel(true)
+	zoom_tween.set_trans(Tween.TRANS_CUBIC)
+	zoom_tween.set_ease(Tween.EASE_IN_OUT)
+	zoom_tween.tween_property(canvas_container, "scale", Vector2(clamped_scale, clamped_scale), duration)
+	zoom_tween.tween_property(canvas_container, "position", target_pos, duration)
+	await zoom_tween.finished
+	current_zoom = clamped_scale
+
+
+func _canvas_to_screen(canvas_pt: Vector2) -> Vector2:
+	return canvas_container.position + canvas_pt * canvas_container.scale.x
+
+
+func _screen_to_canvas(screen_pt: Vector2) -> Vector2:
+	return (screen_pt - canvas_container.position) / maxf(canvas_container.scale.x, 0.001)
+
+
+# ==============================================================================
+# CONTROL EXCLUSIVO DE MANOS Y SONIDO DE LÁPIZ CONTINUO (SIN GOLPETEO)
+# ==============================================================================
+func _set_exclusive_hand(who: String) -> void:
+	if who == "xcarlet":
+		jammy_hand_rect.visible = false
+		jammy_hand_rect.position = HAND_OFFSCREEN_POS
+		xcarlet_hand_rect.visible = true
+	elif who == "jammy":
+		xcarlet_hand_rect.visible = false
+		xcarlet_hand_rect.position = HAND_OFFSCREEN_POS
+		jammy_hand_rect.visible = true
+	else:
+		xcarlet_hand_rect.visible = false
+		xcarlet_hand_rect.position = HAND_OFFSCREEN_POS
+		jammy_hand_rect.visible = false
+		jammy_hand_rect.position = HAND_OFFSCREEN_POS
+		_stop_pencil_sound()
+
+
+func _retract_hand_down(hand: TextureRect) -> void:
+	_stop_pencil_sound()
+	if not hand.visible:
+		return
+	var start_pos: Vector2 = hand.position
+	var end_pos: Vector2 = start_pos + Vector2(-750.0, 880.0)
+	var steps: int = 10
+	for i: int in range(1, steps + 1):
+		var t: float = float(i) / float(steps)
+		hand.position = start_pos.lerp(end_pos, t * t)
+		await get_tree().create_timer(0.018).timeout
+	hand.visible = false
+	hand.position = HAND_OFFSCREEN_POS
+
+
+func _place_hand_at_screen_tip(hand: TextureRect, tip_uv: Vector2, screen_tip_pos: Vector2, is_tracing_now: bool = false) -> void:
+	var safe_tip: Vector2 = Vector2(
+		clampf(screen_tip_pos.x, 20.0, BASE_SIZE.x - 20.0),
+		clampf(screen_tip_pos.y, 20.0, BASE_SIZE.y - 20.0)
+	)
+	var offset: Vector2 = Vector2(hand.size.x * tip_uv.x, hand.size.y * tip_uv.y)
+	var new_pos: Vector2 = safe_tip - offset
+	var moved_dist: float = hand.position.distance_to(new_pos)
+	hand.position = new_pos
+
+	if is_tracing_now and moved_dist > 1.2:
+		_trigger_pencil_sound()
+
+
+func _trigger_pencil_sound() -> void:
+	if pencil_stream == null:
+		return
+	is_pencil_actively_drawing = true
+	pencil_idle_timer = 0.14
+	if not pencil_player.playing:
+		pencil_player.stream = pencil_stream
+		pencil_player.volume_db = 0.0
+		pencil_player.pitch_scale = 1.0
+		pencil_player.play()
+
+
+func _on_pencil_player_finished() -> void:
+	if is_pencil_actively_drawing and pencil_stream != null:
+		pencil_player.stream = pencil_stream
+		pencil_player.pitch_scale = 1.0
+		pencil_player.play()
+
+
+func _stop_pencil_sound() -> void:
+	is_pencil_actively_drawing = false
+	pencil_idle_timer = 0.0
+	if pencil_player != null and pencil_player.playing:
+		pencil_player.stop()
+
+
+# ==============================================================================
+# GENERADORES DE FORMAS EXACTAS DEL DIBUJO (ESLABONES, GOTAS FINAS, ESPIRAL)
+# ==============================================================================
+func _build_chain_links_strokes() -> Array[Dictionary]:
+	var link_centers: Array[Vector2] = [
+		Vector2(0.443, 0.568),
+		Vector2(0.460, 0.563),
+		Vector2(0.478, 0.557),
+		Vector2(0.496, 0.552),
+		Vector2(0.514, 0.546),
+		Vector2(0.531, 0.541)
+	]
+	var strokes: Array[Dictionary] = []
+	var angle_rad: float = deg_to_rad(-16.0)
+	var rx: float = 0.0132
+	var ry: float = 0.0070
+
+	for idx: int in range(link_centers.size()):
+		var c: Vector2 = link_centers[idx]
+		var loop_pts: Array[Vector2] = []
+		var segments: int = 24
+		for s: int in range(segments + 1):
+			var theta: float = (float(s) / float(segments)) * TAU
+			var lx: float = cos(theta) * rx
+			var ly: float = sin(theta) * ry
+			var rot_x: float = lx * cos(angle_rad) - ly * sin(angle_rad)
+			var rot_y: float = lx * sin(angle_rad) + ly * cos(angle_rad)
+			loop_pts.append(Vector2(c.x + rot_x, c.y + rot_y))
+
+		strokes.append({
+			"name": "chain_link_" + str(idx + 1),
+			"pts": _norm_to_screen(loop_pts),
+			"reveal_radius": 15
+		})
+	return strokes
+
+
+func _build_slender_drop_norm_pts(tip_norm: Vector2, width_n: float, height_n: float) -> Array[Vector2]:
+	var pts: Array[Vector2] = []
+	var steps: int = 32
+	for i: int in range(steps + 1):
+		var t: float = (float(i) / float(steps)) * TAU
+		var sin_half: float = sin(t * 0.5)
+		var x_offset: float = (width_n * 0.52) * sin(t) * pow(maxf(sin_half, 0.0), 0.72)
+		var y_offset: float = height_n * (1.0 - cos(t)) * 0.5
+		pts.append(tip_norm + Vector2(x_offset, y_offset))
+	return pts
+
+
+func _build_spiral_signature_norm_pts(center_norm: Vector2, max_rx: float, max_ry: float) -> Array[Vector2]:
+	var pts: Array[Vector2] = []
+	var steps: int = 56
+	var turns: float = 2.15
+	for i: int in range(steps + 1):
+		var u: float = float(i) / float(steps)
+		var theta: float = -PI * 0.35 + u * TAU * turns
+		var r_scale: float = lerpf(1.0, 0.38, u)
+		var px: float = center_norm.x + cos(theta) * max_rx * r_scale
+		var py: float = center_norm.y + sin(theta) * max_ry * r_scale
+		pts.append(Vector2(px, py))
+	return pts
+
+
+# ==============================================================================
+# FLUJO DE TURNOS DE XCARLET Y JAMMY
+# ==============================================================================
+func _start_phase(phase: Phase) -> void:
+	current_phase = phase
+	active_guide_points = PackedVector2Array()
+	guide_covered.clear()
+	current_anchor_idx = -1
+	has_last_sample_pos = false
+	kawaii_panel.visible = false
+	_stop_pencil_sound()
+	guide_canvas.queue_redraw()
+
+	match phase:
+		Phase.AUTO_XCARLET_1:
+			instruction_panel.visible = false
+			await _set_camera_zoom(1.0, Vector2(0.5, 0.5), 0.1)
+			_set_exclusive_hand("xcarlet")
+			base_art_rect.texture = null
+			reveal_art_rect.texture = tex_xcarlet_1_tex
+			reveal_material.set_shader_parameter("preserve_paper_bg", true)
+			_clear_mask(0.0)
+
+			_start_dialogue("Xcarlet", "Let's start with a cute, cute heart—kawaii, isn't it?", XCARLET_COLOR, false, false)
+			await _animate_xcarlet_heart_outline()
+			await _retract_hand_down(xcarlet_hand_rect)
+
+			base_art_rect.texture = tex_xcarlet_1_tex
+			_clear_mask(0.0)
+			reveal_material.set_shader_parameter("preserve_paper_bg", false)
+
+			_start_dialogue(
+				"Jammy",
+				"*Myself is getting so tense, it happens when someone that I wanna keep in my life and likes me decides to approach me, being closer to be my girlfriend than my friend, I can't even explain at all, I think that it's just my destiny that has decided to make me suffer in my most special moments, like my birthday, Christmas, etc.*",
+				MIND_COLOR,
+				true,
+				true
+			)
+			current_phase = Phase.WAIT_AFTER_XCARLET_1
+
+		Phase.SHOW_INSTRUCTIONS:
+			_set_exclusive_hand("none")
+			base_art_rect.texture = tex_xcarlet_1_tex
+			reveal_art_rect.texture = tex_jammy_1
+			reveal_material.set_shader_parameter("preserve_paper_bg", false)
+			_clear_mask(0.0)
+
+			_show_white_instruction(
+				"[center]Draw the stroke with " + str(int(MIN_ACCURACY)) + "% or more accuracy on the indicated parts, by using the mouse to move the hand and the key [lb]M[rb] to draw.[/center]\n[center]Press [lb]ENTER[rb] to begin.[/center]",
+				false
+			)
+
+		Phase.JAMMY_1_CHAIN:
+			instruction_panel.visible = false
+			base_art_rect.texture = tex_xcarlet_1_tex
+			reveal_art_rect.texture = tex_jammy_1
+			_clear_mask(0.0)
+
+			_start_dialogue(
+				"Jammy",
+				"*but you know, in this time I can see a numb sunshine that has achieved to get through among this gray fog with false sunshine, it's not something incredible, but in my life full of sadness, that's a big win*",
+				MIND_COLOR,
+				true,
+				false
+			)
+			# Primero se ve claramente la animación del cuadro rojo del TOC separándose del de Jammy
+			await _show_thought_dots_from_jammy()
+
+			await _set_camera_zoom(2.35, Vector2(0.488, 0.554), 0.55)
+			jammy_strokes_queue = _build_chain_links_strokes()
+			_begin_jammy_interactive_queue()
+
+		Phase.AUTO_XCARLET_2:
+			instruction_panel.visible = false
+			base_art_rect.texture = tex_jammy_1
+			reveal_art_rect.texture = tex_xcarlet_2
+			_clear_mask(0.0)
+
+			_start_dialogue("Xcarlet", "Ohh, I see, a bleeding heart, let's heal it.", XCARLET_COLOR, false, false)
+			await _animate_xcarlet_shading()
+			await _retract_hand_down(xcarlet_hand_rect)
+
+			_update_dialogue_prompt(true)
+			current_phase = Phase.WAIT_AFTER_XCARLET_2
+
+		Phase.JAMMY_2_WOUND_DROPS_PUDDLE:
+			instruction_panel.visible = false
+			base_art_rect.texture = tex_xcarlet_2
+			reveal_art_rect.texture = tex_jammy_2
+			_clear_mask(0.0)
+
+			await _set_camera_zoom(2.20, Vector2(0.502, 0.565), 0.55)
+
+			jammy_strokes_queue = [
+				{
+					"name": "wound_contour",
+					"pts": _norm_to_screen([
+						Vector2(0.499, 0.438),
+						Vector2(0.514, 0.451),
+						Vector2(0.525, 0.476),
+						Vector2(0.512, 0.472),
+						Vector2(0.502, 0.454),
+						Vector2(0.499, 0.438)
+					]),
+					"reveal_radius": 16
+				},
+				{
+					"name": "drop_left_top",
+					"pts": _norm_to_screen(_build_slender_drop_norm_pts(Vector2(0.493, 0.583), 0.0035, 0.021)),
+					"reveal_radius": 10
+				},
+				{
+					"name": "drop_left_bottom",
+					"pts": _norm_to_screen(_build_slender_drop_norm_pts(Vector2(0.491, 0.620), 0.0036, 0.022)),
+					"reveal_radius": 10
+				},
+				{
+					"name": "drop_right_top",
+					"pts": _norm_to_screen(_build_slender_drop_norm_pts(Vector2(0.520, 0.553), 0.0035, 0.021)),
+					"reveal_radius": 10
+				},
+				{
+					"name": "drop_right_bottom",
+					"pts": _norm_to_screen(_build_slender_drop_norm_pts(Vector2(0.517, 0.594), 0.0036, 0.022)),
+					"reveal_radius": 10
+				},
+				{
+					"name": "puddle_contour",
+					"pts": _norm_to_screen([
+						Vector2(0.474, 0.661),
+						Vector2(0.484, 0.654),
+						Vector2(0.499, 0.654),
+						Vector2(0.508, 0.661),
+						Vector2(0.499, 0.668),
+						Vector2(0.484, 0.668),
+						Vector2(0.474, 0.661)
+					]),
+					"reveal_radius": 14
+				}
+			]
+			_begin_jammy_interactive_queue()
+
+		Phase.AUTO_XCARLET_3:
+			instruction_panel.visible = false
+			base_art_rect.texture = tex_jammy_2
+			reveal_art_rect.texture = tex_xcarlet_3
+			_clear_mask(0.0)
+
+			await _animate_xcarlet_bandaid()
+			await _retract_hand_down(xcarlet_hand_rect)
+
+			_update_dialogue_prompt(true)
+			current_phase = Phase.WAIT_AFTER_XCARLET_3
+
+		Phase.JAMMY_3_KNIFE_CUTS:
+			instruction_panel.visible = false
+			base_art_rect.texture = tex_xcarlet_3
+			reveal_art_rect.texture = tex_jammy_3
+			_clear_mask(0.0)
+
+			await _set_camera_zoom(1.75, Vector2(0.340, 0.515), 0.55)
+
+			jammy_strokes_queue = [
+				{
+					"name": "knife_contour",
+					"pts": _norm_to_screen([
+						Vector2(0.199, 0.684),
+						Vector2(0.322, 0.557),
+						Vector2(0.327, 0.562),
+						Vector2(0.431, 0.438),
+						Vector2(0.432, 0.474),
+						Vector2(0.421, 0.530),
+						Vector2(0.396, 0.588),
+						Vector2(0.356, 0.645),
+						Vector2(0.331, 0.582),
+						Vector2(0.207, 0.703),
+						Vector2(0.199, 0.684)
+					]),
+					"reveal_radius": 14
+				},
+				{
+					"name": "cut_1",
+					"pts": _norm_to_screen([
+						Vector2(0.362, 0.368),
+						Vector2(0.376, 0.386),
+						Vector2(0.390, 0.405)
+					]),
+					"reveal_radius": 12
+				},
+				{
+					"name": "cut_2",
+					"pts": _norm_to_screen([
+						Vector2(0.378, 0.354),
+						Vector2(0.392, 0.374),
+						Vector2(0.406, 0.394)
+					]),
+					"reveal_radius": 12
+				},
+				{
+					"name": "cut_3",
+					"pts": _norm_to_screen([
+						Vector2(0.394, 0.342),
+						Vector2(0.408, 0.362),
+						Vector2(0.421, 0.382)
+					]),
+					"reveal_radius": 12
+				}
+			]
+			_begin_jammy_interactive_queue()
+
+		Phase.JAMMY_4_BOTH_SIGNATURE:
+			instruction_panel.visible = false
+			base_art_rect.texture = tex_jammy_3
+			reveal_art_rect.texture = tex_both
+			_clear_mask(0.0)
+
+			_start_dialogue("Xcarlet", "Well, better start practicing our signatures.", XCARLET_COLOR, false, false)
+			await _set_camera_zoom(2.75, Vector2(0.815, 0.905), 0.60)
+			await _animate_xcarlet_cat_signature()
+			await _retract_hand_down(xcarlet_hand_rect)
+
+			jammy_strokes_queue = [
+				{
+					"name": "jammy_spiral_signature",
+					"pts": _norm_to_screen(_build_spiral_signature_norm_pts(Vector2(0.815, 0.905), 0.022, 0.036)),
+					"reveal_radius": 16
+				}
+			]
+			_begin_jammy_interactive_queue()
+
+		Phase.FINISHED:
+			_set_exclusive_hand("none")
+			_show_white_instruction("[center]Press [lb]ENTER[rb] to continue.[/center]", true)
+
+
+# ==============================================================================
+# MECÁNICA INTERACTIVA BIDIRECCIONAL CON FEEDBACK REAL EN TIEMPO REAL
+# ==============================================================================
+func _begin_jammy_interactive_queue() -> void:
+	current_stroke_idx = 0
+	_set_exclusive_hand("jammy")
+	_place_hand_at_screen_tip(jammy_hand_rect, JAMMY_TIP_UV, get_global_mouse_position(), false)
+	_load_current_jammy_stroke()
+
+
+func _load_current_jammy_stroke() -> void:
+	if current_stroke_idx >= jammy_strokes_queue.size():
+		_on_all_jammy_strokes_completed()
+		return
+
+	mask_snapshot = mask_image.get_data().duplicate()
+
+	var raw_pts: PackedVector2Array = jammy_strokes_queue[current_stroke_idx]["pts"]
+	active_guide_points = _resample_polyline(raw_pts, 5.0)
+	is_closed_loop = (
+		active_guide_points.size() >= 4
+		and active_guide_points[0].distance_to(active_guide_points[active_guide_points.size() - 1]) < 16.0
+	)
+
+	guide_covered.clear()
+	guide_covered.resize(active_guide_points.size())
+	for i: int in range(guide_covered.size()):
+		guide_covered[i] = false
+
+	current_anchor_idx = -1
+	is_player_tracing = false
+	has_last_sample_pos = false
+	sample_scores.clear()
+	kawaii_panel.visible = false
+	_stop_pencil_sound()
+	guide_canvas.queue_redraw()
+
+
+func _process(delta: float) -> void:
+	guide_pulse_time += delta
+
+	if is_pencil_actively_drawing:
+		pencil_idle_timer -= delta
+		if pencil_idle_timer <= 0.0:
+			_stop_pencil_sound()
+
+	if not active_guide_points.is_empty():
+		guide_canvas.queue_redraw()
+
+	if jammy_hand_rect.visible and _is_interactive_jammy_phase():
+		var m_screen: Vector2 = get_global_mouse_position()
+		var m_pressed: bool = Input.is_key_pressed(KEY_M)
+		_place_hand_at_screen_tip(jammy_hand_rect, JAMMY_TIP_UV, m_screen, m_pressed)
+
+		var screen_tip: Vector2 = jammy_hand_rect.position + Vector2(jammy_hand_rect.size.x * JAMMY_TIP_UV.x, jammy_hand_rect.size.y * JAMMY_TIP_UV.y)
+		var canvas_tip: Vector2 = _screen_to_canvas(screen_tip)
+
+		if m_pressed:
+			if not is_player_tracing:
+				is_player_tracing = true
+				has_last_sample_pos = false
+				sample_scores.clear()
+				kawaii_panel.visible = true
+				_update_kawaii_bar(100.0)
+			_record_player_trace_at_tip(canvas_tip)
+		elif is_player_tracing:
+			is_player_tracing = false
+			has_last_sample_pos = false
+			_stop_pencil_sound()
+			_evaluate_on_release()
+
+
+func _is_blocking_wait_phase() -> bool:
+	return current_phase in [
+		Phase.WAIT_AFTER_XCARLET_1,
+		Phase.SHOW_INSTRUCTIONS,
+		Phase.WAIT_AFTER_XCARLET_2,
+		Phase.WAIT_AFTER_XCARLET_3,
+		Phase.WAIT_KNIFE_XCARLET_REACTION,
+		Phase.WAIT_KNIFE_JAMMY_RESPONSE,
+		Phase.WAIT_DELAYED_DIALOGUES,
+		Phase.FINISHED
+	]
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if is_xcarlet_turn:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
+			# Si hay otro diálogo pendiente en la cola, avanza al siguiente cuadro primero
+			if _has_more_dialogues():
+				dialogue_queue_idx += 1
+				_render_dialogue_entry(dialogue_queue[dialogue_queue_idx])
+				_update_dialogue_prompt(_is_blocking_wait_phase())
+				return
+
+			match current_phase:
+				Phase.WAIT_DELAYED_DIALOGUES:
+					instruction_panel.visible = false
+					_execute_post_jammy_phase(delayed_return_phase)
+				Phase.WAIT_AFTER_XCARLET_1:
+					_start_phase(Phase.SHOW_INSTRUCTIONS)
+				Phase.SHOW_INSTRUCTIONS:
+					_start_phase(Phase.JAMMY_1_CHAIN)
+				Phase.WAIT_AFTER_XCARLET_2:
+					_start_phase(Phase.JAMMY_2_WOUND_DROPS_PUDDLE)
+				Phase.WAIT_AFTER_XCARLET_3:
+					_start_phase(Phase.JAMMY_3_KNIFE_CUTS)
+				Phase.WAIT_KNIFE_XCARLET_REACTION:
+					_start_dialogue(
+						"Jammy",
+						"It's because a heart like this never stops its suffering, and just wishes to die, cuz it seems to be the easier way to turn off the false sunshine that just worsens the situation with its melancholic light, but it hasn't been able to do it.",
+						JAMMY_COLOR,
+						false,
+						true
+					)
+					current_phase = Phase.WAIT_KNIFE_JAMMY_RESPONSE
+				Phase.WAIT_KNIFE_JAMMY_RESPONSE:
+					_start_phase(Phase.JAMMY_4_BOTH_SIGNATURE)
+				Phase.FINISHED:
+					_finish_scene()
+
+
+func _is_interactive_jammy_phase() -> bool:
+	return current_phase in [
+		Phase.JAMMY_1_CHAIN,
+		Phase.JAMMY_2_WOUND_DROPS_PUDDLE,
+		Phase.JAMMY_3_KNIFE_CUTS,
+		Phase.JAMMY_4_BOTH_SIGNATURE
+	]
+
+
+func _wrap_guide_index(raw_idx: int, total_pts: int) -> int:
+	if is_closed_loop:
+		var m: int = raw_idx % total_pts
+		if m < 0:
+			m += total_pts
+		return m
+	return clampi(raw_idx, 0, total_pts - 1)
+
+
+func _mark_arc_covered(from_idx: int, to_idx: int, delta_step: int, total_pts: int) -> void:
+	var steps: int = absi(delta_step)
+	var dir: int = 1 if delta_step >= 0 else -1
+	for s: int in range(steps + 1):
+		var idx: int = _wrap_guide_index(from_idx + s * dir, total_pts)
+		guide_covered[idx] = true
+	if is_closed_loop:
+		if guide_covered[0] or guide_covered[total_pts - 1]:
+			guide_covered[0] = true
+			guide_covered[total_pts - 1] = true
+
+
+func _compute_covered_ratio() -> float:
+	if guide_covered.is_empty():
+		return 0.0
+	var count: int = 0
+	for c: bool in guide_covered:
+		if c:
+			count += 1
+	return float(count) / float(guide_covered.size())
+
+
+func _score_from_distance(dist_px: float) -> float:
+	if dist_px <= 3.5:
+		return 1.0
+	elif dist_px <= 10.0:
+		return lerpf(0.96, 0.80, (dist_px - 3.5) / 6.5)
+	elif dist_px <= 20.0:
+		return lerpf(0.80, 0.45, (dist_px - 10.0) / 10.0)
+	elif dist_px <= OFF_PATH_ZERO_DIST:
+		return lerpf(0.45, 0.0, (dist_px - 20.0) / (OFF_PATH_ZERO_DIST - 20.0))
+	return 0.0
+
+
+func _record_player_trace_at_tip(canvas_tip: Vector2) -> void:
+	if active_guide_points.is_empty():
 		return
 
-	if event is InputEventMouseButton:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if event.pressed:
-				_start_jammy_stroke(event.position)
-			else:
-				_finish_jammy_stroke()
-		elif event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
-			_undo_last_stroke()
+	if has_last_sample_pos and last_sample_pos.distance_to(canvas_tip) < 2.5:
+		return
 
-	elif event is InputEventMouseMotion and is_drawing:
-		_update_jammy_stroke(event.position)
+	last_sample_pos = canvas_tip
+	has_last_sample_pos = true
 
-	elif event is InputEventKey and event.pressed and not event.echo:
-		match event.keycode:
-			KEY_ENTER, KEY_SPACE:
-				_on_pass_turn_pressed()
-			KEY_Z:
-				_undo_last_stroke()
-			KEY_C:
-				_clear_paper()
-			KEY_1:
-				jammy_brush_width = 4.5
-			KEY_2:
-				jammy_brush_width = 8.0
-			KEY_3:
-				jammy_brush_width = 14.0
+	var total_pts: int = active_guide_points.size()
 
+	if current_anchor_idx == -1:
+		var start_best_idx: int = -1
+		var start_best_dist: float = 999999.0
+		for i: int in range(total_pts):
+			var d: float = canvas_tip.distance_to(active_guide_points[i])
+			if d < start_best_dist:
+				start_best_dist = d
+				start_best_idx = i
 
-func _clamp_to_paper(pos: Vector2) -> Vector2:
-	var margin := 34.0
-	return Vector2(
-		clampf(pos.x, PAPER_RECT.position.x + margin, PAPER_RECT.end.x - margin),
-		clampf(pos.y, PAPER_RECT.position.y + margin, PAPER_RECT.end.y - margin)
-	)
-
-
-func _create_styled_line(ink_color: Color, width: float, artistic_taper: bool = false) -> Line2D:
-	var line := Line2D.new()
-	line.default_color = ink_color
-	line.width = width
-	line.joint_mode = Line2D.LINE_JOINT_ROUND
-	line.begin_cap_mode = Line2D.LINE_CAP_ROUND
-	line.end_cap_mode = Line2D.LINE_CAP_ROUND
-	line.antialiased = true
-
-	var taper := Curve.new()
-	if artistic_taper:
-		taper.add_point(Vector2(0.0, 0.2))
-		taper.add_point(Vector2(0.18, 1.0))
-		taper.add_point(Vector2(0.82, 0.95))
-		taper.add_point(Vector2(1.0, 0.15))
-	else:
-		taper.add_point(Vector2(0.0, 0.75))
-		taper.add_point(Vector2(0.5, 1.0))
-		taper.add_point(Vector2(1.0, 0.75))
-	line.width_curve = taper
-
-	strokes_container.add_child(line)
-	return line
-
-
-func _smooth_curve(control_pts: Array[Vector2], tension: float = 0.45) -> PackedVector2Array:
-	if control_pts.size() < 2:
-		return PackedVector2Array(control_pts)
-
-	var curve := Curve2D.new()
-	curve.bake_interval = 14.0
-	var count := control_pts.size()
-
-	for i in range(count):
-		var pt := _clamp_to_paper(control_pts[i])
-		var in_handle := Vector2.ZERO
-		var out_handle := Vector2.ZERO
-
-		if i == 0:
-			out_handle = (control_pts[1] - control_pts[0]) * (tension * 0.5)
-		elif i == count - 1:
-			in_handle = -(control_pts[count - 1] - control_pts[count - 2]) * (tension * 0.5)
+		if start_best_idx != -1 and start_best_dist <= SNAP_MAX_DIST:
+			current_anchor_idx = start_best_idx
+			_mark_arc_covered(current_anchor_idx, current_anchor_idx, 0, total_pts)
+			sample_scores.append(_score_from_distance(start_best_dist))
 		else:
-			var tangent := (control_pts[i + 1] - control_pts[i - 1]) * (tension * 0.5)
-			in_handle = -tangent
-			out_handle = tangent
-
-		curve.add_point(pt, in_handle, out_handle)
-
-	var baked := curve.get_baked_points()
-	var clamped_baked := PackedVector2Array()
-	for p in baked:
-		clamped_baked.append(_clamp_to_paper(p))
-	return clamped_baked
-
-
-func _start_jammy_stroke(raw_pos: Vector2) -> void:
-	if not PAPER_RECT.has_point(raw_pos):
-		return
-
-	is_drawing = true
-	stroke_step_counter = 0
-	stroke_start_point = _clamp_to_paper(raw_pos)
-
-	current_line = _create_styled_line(JAMMY_INK, jammy_brush_width, false)
-	current_line.add_point(stroke_start_point)
-	_play_pencil_tick(1.0)
-
-
-func _update_jammy_stroke(raw_pos: Vector2) -> void:
-	if current_line == null:
-		return
-
-	var clamped := _clamp_to_paper(raw_pos)
-
-	if Input.is_key_pressed(KEY_SHIFT):
-		if current_line.get_point_count() == 1:
-			current_line.add_point(clamped)
-		else:
-			current_line.set_point_position(1, clamped)
-		return
-
-	var last_pt := current_line.get_point_position(current_line.get_point_count() - 1)
-	if last_pt.distance_to(clamped) >= 6.0:
-		current_line.add_point(clamped)
-		stroke_step_counter += 1
-		if stroke_step_counter % 6 == 0:
-			_play_pencil_tick(randf_range(0.92, 1.08))
-
-
-func _finish_jammy_stroke() -> void:
-	if not is_drawing or current_line == null:
-		return
-
-	is_drawing = false
-	if current_line.get_point_count() < 2:
-		current_line.queue_free()
+			sample_scores.append(_score_from_distance(start_best_dist))
 	else:
-		all_strokes.append(current_line)
-		pending_jammy_strokes.append(current_line)
-	current_line = null
+		var best_step: int = 0
+		var best_idx: int = -1
+		var best_dist: float = 999999.0
 
+		for step: int in range(-2, 3):
+			if not is_closed_loop:
+				var raw: int = current_anchor_idx + step
+				if raw < 0 or raw >= total_pts:
+					continue
+			var cand_idx: int = _wrap_guide_index(current_anchor_idx + step, total_pts)
+			var d: float = canvas_tip.distance_to(active_guide_points[cand_idx])
+			if d < best_dist:
+				best_dist = d
+				best_idx = cand_idx
+				best_step = step
 
-func _undo_last_stroke() -> void:
-	if is_drawing or all_strokes.is_empty():
+		if best_idx != -1 and best_dist <= STEP_MAX_DIST:
+			_mark_arc_covered(current_anchor_idx, best_idx, best_step, total_pts)
+			current_anchor_idx = best_idx
+			sample_scores.append(_score_from_distance(best_dist))
+		else:
+			var off_dist: float = canvas_tip.distance_to(active_guide_points[current_anchor_idx])
+			sample_scores.append(_score_from_distance(off_dist))
+
+	var current_acc: float = _compute_precision_percent()
+	_update_kawaii_bar(current_acc)
+
+	if sample_scores.size() >= 8 and current_acc < 45.0:
+		is_player_tracing = false
+		has_last_sample_pos = false
+		_stop_pencil_sound()
+		_reset_current_stroke(current_acc)
 		return
 
-	var last_line: Line2D = all_strokes.pop_back()
-	pending_jammy_strokes.erase(last_line)
-	last_line.queue_free()
+	if _compute_covered_ratio() >= MIN_COVERAGE_RATIO:
+		is_player_tracing = false
+		has_last_sample_pos = false
+		_stop_pencil_sound()
+		if current_acc >= MIN_ACCURACY:
+			_complete_current_stroke()
+		else:
+			_reset_current_stroke(current_acc)
 
 
-func _clear_paper() -> void:
-	if is_drawing:
+func _compute_precision_percent() -> float:
+	if sample_scores.is_empty():
+		return 100.0
+	var total: float = 0.0
+	for s: float in sample_scores:
+		total += s
+	return (total / float(sample_scores.size())) * 100.0
+
+
+func _evaluate_on_release() -> void:
+	var current_acc: float = _compute_precision_percent()
+	if _compute_covered_ratio() >= (MIN_COVERAGE_RATIO - 0.02) and current_acc >= MIN_ACCURACY:
+		_complete_current_stroke()
+	else:
+		_reset_current_stroke(current_acc)
+
+
+func _complete_current_stroke() -> void:
+	kawaii_panel.visible = false
+	var finished_stroke_name: String = jammy_strokes_queue[current_stroke_idx].get("name", "")
+	var pts: PackedVector2Array = jammy_strokes_queue[current_stroke_idx]["pts"]
+	var reveal_r: int = jammy_strokes_queue[current_stroke_idx].get("reveal_radius", 14)
+	for p: Vector2 in _resample_polyline(pts, 4.0):
+		_paint_mask_circle(p, reveal_r, 1.0)
+
+	if current_phase == Phase.JAMMY_2_WOUND_DROPS_PUDDLE and finished_stroke_name == "wound_contour":
+		_start_dialogue(
+			"Jammy",
+			"*A heart full of wounds, that bleeds a black blood, cuz its suffering has wiped any colour out*",
+			MIND_COLOR,
+			true,
+			false
+		)
+
+	current_stroke_idx += 1
+	_load_current_jammy_stroke()
+
+
+func _reset_current_stroke(acc_val: float) -> void:
+	kawaii_panel.visible = false
+	mask_image.set_data(MASK_SIZE.x, MASK_SIZE.y, false, Image.FORMAT_RGBA8, mask_snapshot)
+	mask_texture.update(mask_image)
+
+	# Si no quedan diálogos de historia sin leer, muestra el aviso de precisión; si hay diálogos pendientes, no los sobrescribe
+	if not _has_more_dialogues():
+		_start_dialogue(
+			"Jammy",
+			"*My hand slipped (" + str(int(round(acc_val))) + "% accuracy). Stay tightly on the dotted line (>= " + str(int(MIN_ACCURACY)) + "%).*",
+			MIND_COLOR,
+			true,
+			false
+		)
+	_load_current_jammy_stroke()
+
+
+func _on_all_jammy_strokes_completed() -> void:
+	active_guide_points = PackedVector2Array()
+	guide_covered.clear()
+	current_anchor_idx = -1
+	has_last_sample_pos = false
+	guide_canvas.queue_redraw()
+	kawaii_panel.visible = false
+	_stop_pencil_sound()
+
+	var completed_phase: Phase = current_phase
+
+	# Si el jugador nunca presionó ENTER y quedaron diálogos atrasados del momento, los muestra automáticamente uno por uno
+	if _has_more_dialogues():
+		delayed_return_phase = completed_phase
+		current_phase = Phase.WAIT_DELAYED_DIALOGUES
+		dialogue_queue_idx += 1
+		_render_dialogue_entry(dialogue_queue[dialogue_queue_idx])
+		_update_dialogue_prompt(true)
 		return
-	for s in all_strokes:
-		if is_instance_valid(s):
-			s.queue_free()
-	all_strokes.clear()
-	pending_jammy_strokes.clear()
+
+	_execute_post_jammy_phase(completed_phase)
 
 
-func _on_pass_turn_pressed() -> void:
-	if is_xcarlet_turn or is_drawing:
-		return
+func _execute_post_jammy_phase(completed_phase: Phase) -> void:
+	match completed_phase:
+		Phase.JAMMY_1_CHAIN:
+			await _hide_thought_dots_badge()
+			await _set_camera_zoom(1.0, Vector2(0.5, 0.5), 0.55)
+			await _retract_hand_down(jammy_hand_rect)
+			_start_phase(Phase.AUTO_XCARLET_2)
 
-	if pending_jammy_strokes.is_empty():
-		_show_dialogue("Xcarlet", "Draw something on the paper first so I can build on it!", XCARLET_COLOR)
-		return
+		Phase.JAMMY_2_WOUND_DROPS_PUDDLE:
+			await _set_camera_zoom(1.0, Vector2(0.5, 0.5), 0.55)
+			await _animate_jammy_puddle_fill()
+			await _retract_hand_down(jammy_hand_rect)
+			_start_phase(Phase.AUTO_XCARLET_3)
 
-	_run_adaptive_xcarlet_turn()
+		Phase.JAMMY_3_KNIFE_CUTS:
+			await _set_camera_zoom(1.0, Vector2(0.5, 0.5), 0.55)
+			await _animate_jammy_knife_fill()
+			await _retract_hand_down(jammy_hand_rect)
+
+			_start_dialogue("Xcarlet", "Ohh, you're mad sis, another wound, why?", XCARLET_COLOR, false, true)
+			current_phase = Phase.WAIT_KNIFE_XCARLET_REACTION
+
+		Phase.JAMMY_4_BOTH_SIGNATURE:
+			await _retract_hand_down(jammy_hand_rect)
+			await _set_camera_zoom(1.0, Vector2(0.5, 0.5), 0.55)
+			await _animate_xcarlet_yellow_light()
+			await _retract_hand_down(xcarlet_hand_rect)
+			_start_phase(Phase.FINISHED)
 
 
 # ==============================================================================
-# CEREBRO ADAPTATIVO: DETECTA PAISAJES, RETRATOS, MEDIAS FIGURAS Y ESPACIOS LIBRES
+# ANIMACIONES REALISTAS TRAZO A TRAZO (TODO SE DIBUJA, NADA APARECE DE GOLPE)
 # ==============================================================================
-func _run_adaptive_xcarlet_turn() -> void:
-	is_xcarlet_turn = true
-	pass_turn_button.disabled = true
-	pass_turn_button.text = "Xcarlet is sketching..."
+func _animate_xcarlet_heart_outline() -> void:
+	_set_exclusive_hand("xcarlet")
+	var left_lobe: PackedVector2Array = _norm_to_screen([
+		Vector2(0.476, 0.415),
+		Vector2(0.448, 0.372),
+		Vector2(0.418, 0.362),
+		Vector2(0.396, 0.415),
+		Vector2(0.408, 0.495),
+		Vector2(0.438, 0.578),
+		Vector2(0.475, 0.646)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, left_lobe, 0.75, 22, 1.0)
+	_stop_pencil_sound()
+	await get_tree().create_timer(0.08).timeout
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, left_lobe, 0.45, 26, 1.0)
+	_stop_pencil_sound()
+	await get_tree().create_timer(0.10).timeout
 
-	var valid_strokes: Array[Line2D] = []
-	for s in pending_jammy_strokes:
-		if is_instance_valid(s) and s.get_point_count() >= 2:
-			valid_strokes.append(s)
-	pending_jammy_strokes.clear()
+	var right_lobe: PackedVector2Array = _norm_to_screen([
+		Vector2(0.476, 0.415),
+		Vector2(0.502, 0.372),
+		Vector2(0.534, 0.362),
+		Vector2(0.558, 0.422),
+		Vector2(0.546, 0.495),
+		Vector2(0.514, 0.580),
+		Vector2(0.475, 0.646)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, right_lobe, 0.75, 22, 1.0)
+	_stop_pencil_sound()
+	await get_tree().create_timer(0.08).timeout
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, right_lobe, 0.45, 26, 1.0)
+	_stop_pencil_sound()
 
-	if valid_strokes.is_empty():
-		is_xcarlet_turn = false
-		pass_turn_button.disabled = false
-		pass_turn_button.text = "Let Xcarlet Complete [ENTER]"
+
+func _animate_xcarlet_shading() -> void:
+	_set_exclusive_hand("xcarlet")
+	var left_shade_outer: PackedVector2Array = _norm_to_screen([
+		Vector2(0.452, 0.382),
+		Vector2(0.418, 0.372),
+		Vector2(0.402, 0.422),
+		Vector2(0.414, 0.500),
+		Vector2(0.444, 0.578),
+		Vector2(0.475, 0.635)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, left_shade_outer, 0.55, 34, 1.0)
+	_stop_pencil_sound()
+
+	var left_shade_inner: PackedVector2Array = _norm_to_screen([
+		Vector2(0.468, 0.425),
+		Vector2(0.440, 0.405),
+		Vector2(0.425, 0.450),
+		Vector2(0.438, 0.525),
+		Vector2(0.475, 0.610)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, left_shade_inner, 0.48, 36, 1.0)
+	_stop_pencil_sound()
+
+	var right_shade_outer: PackedVector2Array = _norm_to_screen([
+		Vector2(0.500, 0.382),
+		Vector2(0.532, 0.372),
+		Vector2(0.550, 0.425),
+		Vector2(0.538, 0.502),
+		Vector2(0.508, 0.578),
+		Vector2(0.475, 0.635)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, right_shade_outer, 0.55, 34, 1.0)
+	_stop_pencil_sound()
+
+	var right_shade_inner: PackedVector2Array = _norm_to_screen([
+		Vector2(0.484, 0.425),
+		Vector2(0.512, 0.405),
+		Vector2(0.526, 0.455),
+		Vector2(0.512, 0.525),
+		Vector2(0.475, 0.610)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, right_shade_inner, 0.48, 36, 1.0)
+	_stop_pencil_sound()
+
+	var outer_smudge_left: PackedVector2Array = _norm_to_screen([
+		Vector2(0.412, 0.352),
+		Vector2(0.384, 0.415),
+		Vector2(0.398, 0.505),
+		Vector2(0.432, 0.592),
+		Vector2(0.475, 0.658)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, outer_smudge_left, 0.42, 34, 1.0)
+	_stop_pencil_sound()
+
+	var outer_smudge_right: PackedVector2Array = _norm_to_screen([
+		Vector2(0.540, 0.352),
+		Vector2(0.568, 0.422),
+		Vector2(0.554, 0.505),
+		Vector2(0.520, 0.592),
+		Vector2(0.475, 0.658)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, outer_smudge_right, 0.42, 34, 1.0)
+	_stop_pencil_sound()
+
+
+func _animate_xcarlet_bandaid() -> void:
+	_set_exclusive_hand("xcarlet")
+	var bandaid_outline: PackedVector2Array = _norm_to_screen([
+		Vector2(0.492, 0.415),
+		Vector2(0.531, 0.453),
+		Vector2(0.512, 0.483),
+		Vector2(0.477, 0.443),
+		Vector2(0.492, 0.415)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, bandaid_outline, 0.50, 14, 1.0)
+	_stop_pencil_sound()
+
+	var gauze_box: PackedVector2Array = _norm_to_screen([
+		Vector2(0.496, 0.430),
+		Vector2(0.519, 0.452),
+		Vector2(0.508, 0.469),
+		Vector2(0.486, 0.446),
+		Vector2(0.496, 0.430)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, gauze_box, 0.35, 14, 1.0)
+	_stop_pencil_sound()
+
+	var gauze_cross_1: PackedVector2Array = _norm_to_screen([
+		Vector2(0.494, 0.434),
+		Vector2(0.512, 0.463)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, gauze_cross_1, 0.18, 14, 1.0)
+	_stop_pencil_sound()
+
+	var gauze_cross_2: PackedVector2Array = _norm_to_screen([
+		Vector2(0.515, 0.443),
+		Vector2(0.491, 0.457)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, gauze_cross_2, 0.18, 14, 1.0)
+	_stop_pencil_sound()
+
+	var side_flaps: PackedVector2Array = _norm_to_screen([
+		Vector2(0.483, 0.432),
+		Vector2(0.492, 0.441),
+		Vector2(0.517, 0.462),
+		Vector2(0.525, 0.470)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, side_flaps, 0.22, 16, 1.0)
+	_stop_pencil_sound()
+
+
+func _animate_jammy_puddle_fill() -> void:
+	_set_exclusive_hand("jammy")
+	var puddle_fill_stroke: PackedVector2Array = _norm_to_screen([
+		Vector2(0.476, 0.661),
+		Vector2(0.506, 0.661),
+		Vector2(0.478, 0.665),
+		Vector2(0.504, 0.665)
+	])
+	await _sweep_hand_along_path(jammy_hand_rect, JAMMY_TIP_UV, puddle_fill_stroke, 0.38, 14, 1.0)
+	_stop_pencil_sound()
+
+
+func _animate_jammy_knife_fill() -> void:
+	_set_exclusive_hand("jammy")
+	var handle_stroke: PackedVector2Array = _norm_to_screen([
+		Vector2(0.203, 0.693),
+		Vector2(0.325, 0.568),
+		Vector2(0.330, 0.576),
+		Vector2(0.206, 0.698)
+	])
+	await _sweep_hand_along_path(jammy_hand_rect, JAMMY_TIP_UV, handle_stroke, 0.42, 16, 1.0)
+	_stop_pencil_sound()
+
+	var blade_shade: PackedVector2Array = _norm_to_screen([
+		Vector2(0.428, 0.455),
+		Vector2(0.342, 0.575),
+		Vector2(0.354, 0.625),
+		Vector2(0.415, 0.525)
+	])
+	await _sweep_hand_along_path(jammy_hand_rect, JAMMY_TIP_UV, blade_shade, 0.48, 22, 1.0)
+	_stop_pencil_sound()
+
+
+func _animate_xcarlet_cat_signature() -> void:
+	_set_exclusive_hand("xcarlet")
+	var cat_stroke_1: PackedVector2Array = _norm_to_screen([
+		Vector2(0.809, 0.899),
+		Vector2(0.821, 0.911)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, cat_stroke_1, 0.28, 14, 1.0)
+	_stop_pencil_sound()
+
+	var cat_stroke_2: PackedVector2Array = _norm_to_screen([
+		Vector2(0.821, 0.899),
+		Vector2(0.809, 0.911)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, cat_stroke_2, 0.28, 14, 1.0)
+	_stop_pencil_sound()
+
+	var cat_ear_tick: PackedVector2Array = _norm_to_screen([
+		Vector2(0.814, 0.894),
+		Vector2(0.821, 0.890)
+	])
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, cat_ear_tick, 0.20, 14, 1.0)
+	_stop_pencil_sound()
+
+
+func _animate_xcarlet_yellow_light() -> void:
+	_set_exclusive_hand("xcarlet")
+	var center: Vector2 = Vector2(0.476, 0.505)
+	var inner_halo: Array[Vector2] = []
+	var outer_halo: Array[Vector2] = []
+	var steps: int = 36
+	for i: int in range(steps + 1):
+		var theta: float = -PI * 0.5 + (float(i) / float(steps)) * TAU
+		inner_halo.append(center + Vector2(cos(theta) * 0.115, sin(theta) * 0.185))
+		outer_halo.append(center + Vector2(cos(theta) * 0.165, sin(theta) * 0.255))
+
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, _norm_to_screen(inner_halo), 0.85, 56, 1.0)
+	_stop_pencil_sound()
+	await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, _norm_to_screen(outer_halo), 0.95, 64, 1.0)
+	_stop_pencil_sound()
+
+	var light_rays: Array[Array] = [
+		[Vector2(0.415, 0.365), Vector2(0.320, 0.220)],
+		[Vector2(0.476, 0.355), Vector2(0.476, 0.185)],
+		[Vector2(0.538, 0.365), Vector2(0.635, 0.220)],
+		[Vector2(0.565, 0.455), Vector2(0.715, 0.400)],
+		[Vector2(0.555, 0.560), Vector2(0.695, 0.645)],
+		[Vector2(0.395, 0.455), Vector2(0.245, 0.400)],
+		[Vector2(0.405, 0.560), Vector2(0.265, 0.645)],
+		[Vector2(0.476, 0.645), Vector2(0.476, 0.785)]
+	]
+	for ray: Array in light_rays:
+		await _sweep_hand_along_path(xcarlet_hand_rect, XCARLET_TIP_UV, _norm_to_screen(ray), 0.20, 56, 1.0)
+		_stop_pencil_sound()
+
+
+func _sweep_hand_along_path(
+	hand: TextureRect,
+	tip_uv: Vector2,
+	canvas_path: PackedVector2Array,
+	duration: float,
+	brush_radius_px: int,
+	opacity_strength: float
+) -> void:
+	var sampled: PackedVector2Array = _resample_polyline(canvas_path, 11.0)
+	if sampled.is_empty():
 		return
 
-	var first_pt := valid_strokes[0].get_point_position(0)
-	var min_pt := first_pt
-	var max_pt := first_pt
-	var total_length := 0.0
-	var horizontal_strokes := 0
+	var step_time: float = clampf(duration / float(sampled.size()), 0.008, 0.028)
+	for i: int in range(sampled.size()):
+		var canvas_pt: Vector2 = sampled[i]
+		_place_hand_at_screen_tip(hand, tip_uv, _canvas_to_screen(canvas_pt), true)
+		_paint_mask_circle(canvas_pt, brush_radius_px, opacity_strength)
+		await get_tree().create_timer(step_time).timeout
 
-	for s in valid_strokes:
-		var pts := s.points
-		var s_min := pts[0]
-		var s_max := pts[0]
-		for i in range(pts.size()):
-			min_pt = min_pt.min(pts[i])
-			max_pt = max_pt.max(pts[i])
-			s_min = s_min.min(pts[i])
-			s_max = s_max.max(pts[i])
-			if i > 0:
-				total_length += pts[i - 1].distance_to(pts[i])
-		var s_size := s_max - s_min
-		if s_size.x > s_size.y * 1.25 and s_size.x > 180.0:
-			horizontal_strokes += 1
 
-	var cluster_rect := Rect2(min_pt, max_pt - min_pt)
-	var stroke_count := valid_strokes.size()
-	var aspect := cluster_rect.size.x / maxf(cluster_rect.size.y, 1.0)
+# ==============================================================================
+# DIBUJO DE LÍNEAS PUNTEADAS FINAS QUE CAMBIAN DE COLOR EN CUALQUIER SENTIDO
+# ==============================================================================
+func _on_guide_canvas_draw() -> void:
+	if active_guide_points.size() < 2 or guide_covered.size() != active_guide_points.size():
+		return
 
-	var detail_level := 1
-	if stroke_count >= 7 or total_length >= 3000.0:
-		detail_level = 3
-	elif stroke_count >= 3 or total_length >= 1400.0:
-		detail_level = 2
+	var pulse: float = 0.72 + 0.28 * sin(guide_pulse_time * 5.0)
+	var pending_col: Color = Color(0.95, 0.25, 0.46, pulse)
+	var done_col: Color = Color(0.16, 0.78, 0.50, 0.96)
 
-	# 1. Media figura abierta en 1 trazo (medio corazón, media ala, media estrella)
-	if stroke_count == 1:
-		var pts := valid_strokes[0].points
-		var stats := _analyze_single_stroke(pts)
-		if stats["is_open"] and stats["chord_len"] > 130.0 and stats["max_bulge"] > 48.0 and aspect < 1.35:
-			_show_dialogue("Xcarlet", "Ooh, a half-shape! Let me mirror the other side for you.", XCARLET_COLOR)
-			await _draw_mirrored_half(pts, detail_level)
-			_finish_xcarlet_turn(detail_level)
-			return
+	for i: int in range(0, active_guide_points.size() - 1, 2):
+		var next_i: int = mini(i + 1, active_guide_points.size() - 1)
+		var p1: Vector2 = active_guide_points[i]
+		var p2: Vector2 = active_guide_points[next_i]
+		var is_seg_done: bool = guide_covered[i] and guide_covered[next_i]
+		var col: Color = done_col if is_seg_done else pending_col
+		guide_canvas.draw_line(p1, p2, col, 3.0, true)
 
-	# 2. Paisaje (montañas, río, horizonte ancho o varios trazos horizontales)
-	if aspect >= 1.40 or horizontal_strokes >= 2 or cluster_rect.size.x >= 950.0:
-		_show_dialogue("Xcarlet", "A scenic landscape! Let me add a sun, clouds, and some life to the sky.", XCARLET_COLOR)
-		await _draw_scenic_landscape(valid_strokes, cluster_rect, detail_level)
 
-	# 3. Retrato / personaje (proporción cuadrada o vertical con varios trazos)
-	elif stroke_count >= 2 and aspect > 0.52 and aspect < 1.40 and cluster_rect.size.x > 110.0:
-		if detail_level >= 2:
-			_show_dialogue("Xcarlet", "Nice character! I'll add flowing hair, bangs, and shoulders.", XCARLET_COLOR)
+# ==============================================================================
+# UTILIDADES DE MÁSCARA, GEOMETRÍA Y BARRA DE ACCURACY GRADUAL
+# ==============================================================================
+func _clear_mask(alpha_val: float) -> void:
+	mask_image.fill(Color(alpha_val, alpha_val, alpha_val, 1.0))
+	mask_texture.update(mask_image)
+
+
+func _paint_mask_circle(canvas_pos: Vector2, radius_px: int, target_alpha: float = 1.0) -> void:
+	var uv: Vector2 = Vector2(canvas_pos.x / BASE_SIZE.x, canvas_pos.y / BASE_SIZE.y)
+	var cx: int = int(uv.x * float(MASK_SIZE.x))
+	var cy: int = int(uv.y * float(MASK_SIZE.y))
+	var r_sq: int = radius_px * radius_px
+
+	var min_x: int = maxi(cx - radius_px, 0)
+	var max_x: int = mini(cx + radius_px, MASK_SIZE.x - 1)
+	var min_y: int = maxi(cy - radius_px, 0)
+	var max_y: int = mini(cy + radius_px, MASK_SIZE.y - 1)
+
+	for y: int in range(min_y, max_y + 1):
+		var dy: int = y - cy
+		for x: int in range(min_x, max_x + 1):
+			var dx: int = x - cx
+			var d_sq: int = dx * dx + dy * dy
+			if d_sq <= r_sq:
+				var falloff: float = 1.0 - (float(d_sq) / float(maxi(r_sq, 1))) * 0.15
+				var val: float = clampf(target_alpha * falloff, 0.0, 1.0)
+				var cur: float = mask_image.get_pixel(x, y).r
+				if val > cur:
+					mask_image.set_pixel(x, y, Color(val, val, val, 1.0))
+
+	mask_texture.update(mask_image)
+
+
+func _norm_to_screen(norm_pts: Array) -> PackedVector2Array:
+	var out: PackedVector2Array = PackedVector2Array()
+	for item in norm_pts:
+		var np: Vector2 = item
+		out.append(Vector2(np.x * BASE_SIZE.x, np.y * BASE_SIZE.y))
+	return out
+
+
+func _resample_polyline(pts: PackedVector2Array, spacing: float) -> PackedVector2Array:
+	if pts.size() < 2:
+		return pts
+	var result: PackedVector2Array = PackedVector2Array()
+	result.append(pts[0])
+	var accum: float = 0.0
+	for i: int in range(1, pts.size()):
+		var a: Vector2 = pts[i - 1]
+		var b: Vector2 = pts[i]
+		var seg_len: float = a.distance_to(b)
+		if seg_len < 0.001:
+			continue
+		var dir: Vector2 = (b - a) / seg_len
+		var pos: Vector2 = a
+		var remaining: float = seg_len
+		while accum + remaining >= spacing:
+			var step: float = spacing - accum
+			pos += dir * step
+			result.append(pos)
+			remaining -= step
+			accum = 0.0
+		accum += remaining
+	if result[result.size() - 1].distance_to(pts[pts.size() - 1]) > 2.0:
+		result.append(pts[pts.size() - 1])
+	return result
+
+
+func _get_accuracy_bar_color(pct: float) -> Color:
+	if pct >= 90.0:
+		return Color("#ff85a1")
+	elif pct >= 80.0:
+		return Color("#ff5c8a")
+	elif pct >= 70.0:
+		return Color("#ff3366")
+	elif pct >= 60.0:
+		return Color("#e62e3d")
+	elif pct >= 50.0:
+		return Color("#cc1424")
+	else:
+		return Color("#99000d")
+
+
+func _update_kawaii_bar(pct: float) -> void:
+	var clamped: float = clampf(pct, 0.0, 100.0)
+	var ratio: float = clamped / 100.0
+	var bar_col: Color = _get_accuracy_bar_color(clamped)
+
+	kawaii_bar_fill.size.x = 662.0 * ratio
+	kawaii_bar_fill.color = bar_col
+	kawaii_percent_label.add_theme_color_override("font_color", bar_col.darkened(0.15))
+
+	if clamped >= MIN_ACCURACY:
+		kawaii_percent_label.text = str(int(round(clamped))) + "% ★"
+	else:
+		kawaii_percent_label.text = str(int(round(clamped))) + "% !"
+
+
+# ==============================================================================
+# SISTEMA DE DIÁLOGOS CON DIVISIÓN ESTRICTA (CERO DESBORDAMIENTO) Y COLA DE ATRASADOS
+# ==============================================================================
+func _fits_in_dialogue_box(candidate: String, font: Font, font_size: int, max_width: float, max_height: float) -> bool:
+	if font == null:
+		return candidate.length() <= 85
+	var measured: Vector2 = font.get_multiline_string_size(candidate, HORIZONTAL_ALIGNMENT_CENTER, max_width, font_size)
+	return measured.y <= max_height
+
+
+func _apply_thought_markers(text: String, add_start: bool, add_end: bool) -> String:
+	var result: String = text
+	if add_start:
+		result = "*" + result
+	if add_end:
+		result += "*"
+	return result
+
+
+func _split_text_for_dialogue_box(raw_text: String, is_mind: bool) -> Array[String]:
+	var font: Font = rock_salt_font if is_mind else fredoka_font
+	var font_size: int = 36 if is_mind else 46
+	# Márgenes conservadores para garantizar que jamás se desborde ni una línea
+	var max_width: float = DIALOGUE_PANEL_SIZE.x - 130.0
+	var max_height: float = 145.0 if is_mind else 156.0
+
+	var has_start_marker: bool = is_mind or raw_text.begins_with("*")
+	var has_end_marker: bool = is_mind or raw_text.ends_with("*")
+	var inner_text: String = raw_text.trim_prefix("*").trim_suffix("*")
+
+	var full_marked: String = _apply_thought_markers(inner_text, has_start_marker, has_end_marker)
+	if _fits_in_dialogue_box(full_marked, font, font_size, max_width, max_height):
+		return [full_marked]
+
+	var pages: Array[String] = []
+	var chunk: String = ""
+	for word: String in inner_text.split(" "):
+		var candidate: String = word if chunk.is_empty() else chunk + " " + word
+		var marked_candidate: String = _apply_thought_markers(candidate, has_start_marker, has_end_marker)
+		if not chunk.is_empty() and not _fits_in_dialogue_box(marked_candidate, font, font_size, max_width, max_height):
+			pages.append(_apply_thought_markers(chunk, has_start_marker, false))
+			has_start_marker = false
+			chunk = word
 		else:
-			_show_dialogue("Xcarlet", "A quick character sketch! Let me add soft hair and shoulders.", XCARLET_COLOR)
-		await _draw_character_adaptive(cluster_rect, detail_level)
+			chunk = candidate
 
-	# 4. Boceto libre -> detalles sutiles en los huecos libres (sin encerrar en óvalos gigantes)
+	if not chunk.is_empty():
+		pages.append(_apply_thought_markers(chunk, has_start_marker, has_end_marker))
+
+	return pages
+
+
+func _has_more_dialogues() -> bool:
+	return dialogue_queue_idx + 1 < dialogue_queue.size()
+
+
+func _start_dialogue(speaker: String, text: String, border_col: Color, is_mind: bool = false, is_blocking_wait: bool = false) -> void:
+	var pages: Array[String] = _split_text_for_dialogue_box(text, is_mind)
+	dialogue_queue.clear()
+	for page: String in pages:
+		dialogue_queue.append({
+			"speaker": speaker,
+			"text": page,
+			"border_col": border_col,
+			"is_mind": is_mind
+		})
+
+	dialogue_queue_idx = 0
+	_render_dialogue_entry(dialogue_queue[0])
+	_update_dialogue_prompt(is_blocking_wait)
+
+
+func _render_dialogue_entry(entry: Dictionary) -> void:
+	var speaker: String = entry["speaker"]
+	var text: String = entry["text"]
+	var border_col: Color = entry["border_col"]
+	var is_mind: bool = entry["is_mind"]
+
+	dialogue_panel.position = DIALOGUE_PANEL_POS
+	dialogue_panel.size = DIALOGUE_PANEL_SIZE
+	dialogue_label.position = Vector2(44.0, 20.0)
+	dialogue_label.size = Vector2(DIALOGUE_PANEL_SIZE.x - 88.0, DIALOGUE_PANEL_SIZE.y - 40.0)
+
+	if is_mind and border_col == MIND_COLOR:
+		# Fondo oscuro casi opaco para que el rojo #ff5a5f resalte con total nitidez sobre el papel blanco
+		dialogue_label.add_theme_color_override("font_color", MIND_COLOR)
+		if rock_salt_font:
+			dialogue_label.add_theme_font_override("font", rock_salt_font)
+		dialogue_label.add_theme_font_size_override("font_size", 36)
+		dialogue_label.add_theme_constant_override("outline_size", 0)
+		dialogue_label.add_theme_color_override("font_shadow_color", Color("#000000e6"))
+		dialogue_label.add_theme_constant_override("shadow_offset_x", 3)
+		dialogue_label.add_theme_constant_override("shadow_offset_y", 3)
+
+		var j_border: Color = Color(JAMMY_COLOR.r, JAMMY_COLOR.g, JAMMY_COLOR.b, 0.85)
+		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(MIND_PANEL_COLOR, j_border))
+
+		speaker_panel.visible = true
+		speaker_panel.position = Vector2(DIALOGUE_PANEL_POS.x + 36.0, DIALOGUE_PANEL_POS.y - SPEAKER_PANEL_SIZE.y + 2.0)
+		speaker_panel.size = SPEAKER_PANEL_SIZE
+		speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, JAMMY_COLOR))
+		speaker_label.text = speaker
+		speaker_label.add_theme_color_override("font_color", JAMMY_COLOR)
 	else:
-		_show_dialogue("Xcarlet", "I love the movement in your lines—let me add a few delicate accents around it!", XCARLET_COLOR)
-		await _draw_subtle_accents(cluster_rect, detail_level)
+		# Fondo blanco opaco y letra negra (#161616) para diálogos normales en este nivel
+		dialogue_label.add_theme_color_override("font_color", NORMAL_BLACK_TEXT_COLOR)
+		if fredoka_font:
+			dialogue_label.add_theme_font_override("font", fredoka_font)
+		dialogue_label.add_theme_font_size_override("font_size", 46)
+		dialogue_label.add_theme_constant_override("outline_size", 0)
+		dialogue_label.add_theme_color_override("font_shadow_color", Color.TRANSPARENT)
+		dialogue_label.add_theme_constant_override("shadow_offset_x", 0)
+		dialogue_label.add_theme_constant_override("shadow_offset_y", 0)
 
-	_finish_xcarlet_turn(detail_level)
+		var s_border: Color = Color(border_col.r, border_col.g, border_col.b, 0.85)
+		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(NORMAL_WHITE_PANEL_COLOR, s_border))
 
-
-func _finish_xcarlet_turn(detail_level: int) -> void:
-	is_xcarlet_turn = false
-	pass_turn_button.disabled = false
-	pass_turn_button.text = "Let Xcarlet Complete [ENTER]"
-	if detail_level >= 2:
-		_show_dialogue("Jammy", "*She actually read the whole scene and completed what was missing...*", JAMMY_COLOR, true)
-	else:
-		_show_dialogue("Jammy", "*Even on a quick sketch, her lines look so effortless.*", JAMMY_COLOR, true)
-
-
-func _analyze_single_stroke(pts: PackedVector2Array) -> Dictionary:
-	var p_start := pts[0]
-	var p_end := pts[pts.size() - 1]
-	var chord_vec := p_end - p_start
-	var chord_len := chord_vec.length()
-	var axis := chord_vec.normalized() if chord_len > 0.001 else Vector2.RIGHT
-
-	var path_len := 0.0
-	var max_bulge := 0.0
-	for i in range(pts.size()):
-		if i > 0:
-			path_len += pts[i - 1].distance_to(pts[i])
-		var rel := pts[i] - p_start
-		var proj := axis * rel.dot(axis)
-		var perp_dist := (rel - proj).length()
-		if perp_dist > max_bulge:
-			max_bulge = perp_dist
-
-	var is_open := chord_len > 90.0 and (chord_len / maxf(path_len, 1.0)) > 0.24
-	return {
-		"chord_len": chord_len,
-		"path_len": path_len,
-		"max_bulge": max_bulge,
-		"is_open": is_open
-	}
-
-
-# --- PAISAJE INTELIGENTE (SOL, RAYOS, NUBES, AVES Y DETALLES EN EL AGUA) ---
-func _draw_scenic_landscape(strokes: Array[Line2D], rect: Rect2, detail: int) -> void:
-	var cx := rect.get_center().x
-	# Detectar qué lado del cielo tiene menos trazos altos para colocar el sol sin encimarlo
-	var left_highest_y := PAPER_RECT.end.y
-	var right_highest_y := PAPER_RECT.end.y
-	for s in strokes:
-		for p in s.points:
-			if p.x < cx:
-				left_highest_y = minf(left_highest_y, p.y)
-			else:
-				right_highest_y = minf(right_highest_y, p.y)
-
-	var sun_on_right := right_highest_y >= left_highest_y
-	var sun_x := rect.end.x - rect.size.x * 0.14 if sun_on_right else rect.position.x + rect.size.x * 0.14
-	var cloud_x := rect.position.x + rect.size.x * 0.22 if sun_on_right else rect.end.x - rect.size.x * 0.22
-
-	var sky_y := clampf(rect.position.y - 55.0, PAPER_RECT.position.y + 110.0, PAPER_RECT.position.y + 420.0)
-
-	# 1. Sol en el cielo despejado
-	var sun_center := _clamp_to_paper(Vector2(sun_x, sky_y))
-	var sun_r := 52.0
-	var sun_pts: Array[Vector2] = []
-	for i in range(13):
-		var a := (float(i) / 12.0) * TAU
-		sun_pts.append(sun_center + Vector2(cos(a), sin(a)) * sun_r)
-	await _animate_xcarlet_stroke(_smooth_curve(sun_pts, 0.52), 7.0)
-
-	# Rayos del sol
-	var ray_count := 7 if detail >= 2 else 5
-	for i in range(ray_count):
-		var a := (float(i) / float(ray_count)) * TAU + 0.2
-		var dir := Vector2(cos(a), sin(a))
-		var ray := PackedVector2Array([
-			_clamp_to_paper(sun_center + dir * (sun_r + 16.0)),
-			_clamp_to_paper(sun_center + dir * (sun_r + 44.0))
-		])
-		await _animate_xcarlet_stroke(ray, 5.0)
-
-	# 2. Nube esponjosa en el lado opuesto del cielo
-	var cloud_c := _clamp_to_paper(Vector2(cloud_x, sky_y + 20.0))
-	var cloud := _smooth_curve([
-		cloud_c + Vector2(-115, 22),
-		cloud_c + Vector2(-95, -18),
-		cloud_c + Vector2(-42, -32),
-		cloud_c + Vector2(-8, -52),
-		cloud_c + Vector2(45, -42),
-		cloud_c + Vector2(92, -16),
-		cloud_c + Vector2(115, 22),
-		cloud_c + Vector2(0, 28),
-		cloud_c + Vector2(-115, 22)
-	], 0.5)
-	await _animate_xcarlet_stroke(cloud, 6.5)
-
-	# 3. Aves volando cerca de las cumbres
-	var bird_base := _clamp_to_paper(Vector2(cx, sky_y + 35.0))
-	await _draw_bird(bird_base, 34.0)
-	if detail >= 2:
-		await _draw_bird(bird_base + Vector2(85.0, -32.0), 25.0)
-
-	# 4. Si el dibujo es elaborado, agrega reflejos en el río/suelo y un pino en la orilla
-	if detail >= 2:
-		var ripple_y := clampf(rect.end.y - rect.size.y * 0.14, PAPER_RECT.position.y + 200.0, PAPER_RECT.end.y - 70.0)
-		var ripple := _smooth_curve([
-			Vector2(cx - 140.0, ripple_y),
-			Vector2(cx - 45.0, ripple_y + 12.0),
-			Vector2(cx + 55.0, ripple_y + 6.0),
-			Vector2(cx + 150.0, ripple_y - 8.0)
-		], 0.5)
-		await _animate_xcarlet_stroke(ripple, 5.0)
-
-
-func _draw_bird(center: Vector2, wing_span: float) -> void:
-	var left_wing := _smooth_curve([
-		center + Vector2(-wing_span, -wing_span * 0.25),
-		center + Vector2(-wing_span * 0.45, -wing_span * 0.45),
-		center
-	], 0.5)
-	var right_wing := _smooth_curve([
-		center,
-		center + Vector2(wing_span * 0.45, -wing_span * 0.45),
-		center + Vector2(wing_span, -wing_span * 0.25)
-	], 0.5)
-	await _animate_xcarlet_stroke(left_wing, 5.0)
-	await _animate_xcarlet_stroke(right_wing, 5.0)
-
-
-# --- PERSONAJE CON CURVAS ORGÁNICAS ---
-func _draw_character_adaptive(rect: Rect2, detail: int) -> void:
-	var cx := rect.get_center().x
-	var top_y := rect.position.y
-	var bot_y := rect.end.y
-	var w := rect.size.x
-	var h := rect.size.y
-
-	var outer_hair := _smooth_curve([
-		Vector2(rect.position.x - w * 0.24, bot_y + h * 0.22),
-		Vector2(rect.position.x - w * 0.28, top_y + h * 0.35),
-		Vector2(rect.position.x - w * 0.12, top_y - h * 0.26),
-		Vector2(cx, top_y - h * 0.34),
-		Vector2(rect.end.x + w * 0.12, top_y - h * 0.26),
-		Vector2(rect.end.x + w * 0.28, top_y + h * 0.35),
-		Vector2(rect.end.x + w * 0.24, bot_y + h * 0.22)
-	], 0.55)
-	await _animate_xcarlet_stroke(outer_hair, 8.5)
-
-	var bangs := _smooth_curve([
-		Vector2(rect.position.x - w * 0.05, top_y + h * 0.26),
-		Vector2(cx - w * 0.22, top_y + h * 0.06),
-		Vector2(cx - w * 0.06, top_y + h * 0.24),
-		Vector2(cx + w * 0.04, top_y + h * 0.04),
-		Vector2(cx + w * 0.20, top_y + h * 0.23),
-		Vector2(rect.end.x + w * 0.05, top_y + h * 0.16)
-	], 0.45)
-	await _animate_xcarlet_stroke(bangs, 6.5)
-
-	var left_shoulder := _smooth_curve([
-		Vector2(cx - w * 0.15, bot_y + h * 0.02),
-		Vector2(cx - w * 0.22, bot_y + h * 0.24),
-		Vector2(cx - w * 0.55, bot_y + h * 0.38),
-		Vector2(cx - w * 0.85, bot_y + h * 0.62)
-	], 0.5)
-	var right_shoulder := _smooth_curve([
-		Vector2(cx + w * 0.15, bot_y + h * 0.02),
-		Vector2(cx + w * 0.22, bot_y + h * 0.24),
-		Vector2(cx + w * 0.55, bot_y + h * 0.38),
-		Vector2(cx + w * 0.85, bot_y + h * 0.62)
-	], 0.5)
-	await _animate_xcarlet_stroke(left_shoulder, 8.0)
-	await _animate_xcarlet_stroke(right_shoulder, 8.0)
-
-	if detail >= 2:
-		var inner_lock_l := _smooth_curve([
-			Vector2(rect.position.x - w * 0.12, top_y + h * 0.18),
-			Vector2(rect.position.x - w * 0.16, bot_y + h * 0.05),
-			Vector2(rect.position.x - w * 0.06, bot_y + h * 0.32)
-		], 0.5)
-		var inner_lock_r := _smooth_curve([
-			Vector2(rect.end.x + w * 0.12, top_y + h * 0.18),
-			Vector2(rect.end.x + w * 0.16, bot_y + h * 0.05),
-			Vector2(rect.end.x + w * 0.06, bot_y + h * 0.32)
-		], 0.5)
-		var collar := _smooth_curve([
-			Vector2(cx - w * 0.24, bot_y + h * 0.22),
-			Vector2(cx, bot_y + h * 0.36),
-			Vector2(cx + w * 0.24, bot_y + h * 0.22)
-		], 0.5)
-		await _animate_xcarlet_stroke(inner_lock_l, 5.5)
-		await _animate_xcarlet_stroke(inner_lock_r, 5.5)
-		await _animate_xcarlet_stroke(collar, 6.0)
-
-
-# --- ESPEJO SUAVE PARA MEDIAS FIGURAS ---
-func _draw_mirrored_half(pts: PackedVector2Array, detail: int) -> void:
-	var p_start := pts[0]
-	var p_end := pts[pts.size() - 1]
-	var axis := (p_end - p_start).normalized()
-	var normal := Vector2(-axis.y, axis.x)
-
-	var raw_mirror: Array[Vector2] = []
-	for i in range(pts.size()):
-		var p := pts[i]
-		var v := p - p_start
-		var proj := p_start + axis * v.dot(axis)
-		var mirrored := 2.0 * proj - p
-		if i > 0 and i < pts.size() - 1:
-			mirrored += normal * sin(float(i) * 0.3) * 4.0
-		raw_mirror.append(mirrored)
-
-	await _animate_xcarlet_stroke(_smooth_curve(raw_mirror, 0.4), 8.5)
-
-	if detail >= 2:
-		var mid := p_start.lerp(p_end, 0.5)
-		await _draw_curved_sparkle(mid + normal * 70.0, 24.0)
-
-
-# --- DETALLES SUTILES SIN ÓVALOS GIGANTES ---
-func _draw_subtle_accents(rect: Rect2, detail: int) -> void:
-	await _draw_curved_sparkle(Vector2(rect.end.x + 48.0, rect.position.y - 20.0), 28.0)
-	await _draw_curved_sparkle(Vector2(rect.position.x - 48.0, rect.end.y + 18.0), 22.0)
-
-	if detail >= 2:
-		var cx := rect.get_center().x
-		var flourish := _smooth_curve([
-			Vector2(cx - 110.0, rect.end.y + 38.0),
-			Vector2(cx, rect.end.y + 62.0),
-			Vector2(cx + 110.0, rect.end.y + 38.0)
-		], 0.55)
-		await _animate_xcarlet_stroke(flourish, 5.5)
-
-
-func _draw_curved_sparkle(center: Vector2, radius: float) -> void:
-	var star := _smooth_curve([
-		center + Vector2(0.0, -radius),
-		center + Vector2(radius * 0.22, -radius * 0.22),
-		center + Vector2(radius, 0.0),
-		center + Vector2(radius * 0.22, radius * 0.22),
-		center + Vector2(0.0, radius),
-		center + Vector2(-radius * 0.22, radius * 0.22),
-		center + Vector2(-radius, 0.0),
-		center + Vector2(-radius * 0.22, -radius * 0.22),
-		center + Vector2(0.0, -radius)
-	], 0.35)
-	await _animate_xcarlet_stroke(star, 5.0)
-
-
-func _animate_xcarlet_stroke(target_points: PackedVector2Array, width: float = 8.0) -> void:
-	if target_points.size() < 2:
-		return
-
-	var line := _create_styled_line(XCARLET_INK, width, true)
-	all_strokes.append(line)
-
-	var step_delay := clampf(0.45 / float(target_points.size()), 0.006, 0.022)
-	for i in range(target_points.size()):
-		line.add_point(target_points[i])
-		if i % 5 == 0:
-			_play_pencil_tick(randf_range(1.12, 1.25))
-		await get_tree().create_timer(step_delay).timeout
-
-
-func _play_pencil_tick(pitch: float) -> void:
-	if pencil_stream == null:
-		return
-	pencil_player.pitch_scale = pitch
-	pencil_player.play()
-
-
-func _show_dialogue(speaker: String, text: String, border_col: Color, is_thought: bool = false) -> void:
-	speaker_label.text = speaker
-	speaker_label.add_theme_color_override("font_color", border_col)
-	speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, border_col))
-	dialogue_panel.add_theme_stylebox_override("panel", _make_box_style(PANEL_COLOR, border_col))
+		speaker_panel.visible = true
+		speaker_panel.position = Vector2(DIALOGUE_PANEL_POS.x + 36.0, DIALOGUE_PANEL_POS.y - SPEAKER_PANEL_SIZE.y + 2.0)
+		speaker_panel.size = SPEAKER_PANEL_SIZE
+		speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, border_col))
+		speaker_label.text = speaker
+		speaker_label.add_theme_color_override("font_color", border_col)
 
 	dialogue_label.text = text
-	if is_thought and rock_salt_font:
-		dialogue_label.add_theme_font_override("font", rock_salt_font)
-		dialogue_label.add_theme_font_size_override("font_size", 32)
-	elif fredoka_font:
-		dialogue_label.add_theme_font_override("font", fredoka_font)
-		dialogue_label.add_theme_font_size_override("font_size", 42)
 
 
-func _make_box_style(bg_col: Color, border_col: Color) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg_col
-	s.border_color = Color(border_col.r, border_col.g, border_col.b, 0.75)
-	s.set_border_width_all(3)
-	s.set_corner_radius_all(18)
-	return s
+func _make_dialogue_style(bg_color: Color, border_color: Color) -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = bg_color
+	style.corner_radius_top_left = 18
+	style.corner_radius_top_right = 18
+	style.corner_radius_bottom_left = 18
+	style.corner_radius_bottom_right = 18
+	style.border_width_left = 3
+	style.border_width_top = 3
+	style.border_width_right = 3
+	style.border_width_bottom = 3
+	style.border_color = border_color
+	return style
 
 
-func _make_speaker_style(bg_col: Color, border_col: Color) -> StyleBoxFlat:
-	var s := StyleBoxFlat.new()
-	s.bg_color = bg_col
-	s.border_color = Color(border_col.r, border_col.g, border_col.b, 0.85)
-	s.border_width_left = 3
-	s.border_width_top = 3
-	s.border_width_right = 3
-	s.border_width_bottom = 0
-	s.corner_radius_top_left = 14
-	s.corner_radius_top_right = 14
-	return s
+func _make_speaker_style(bg_color: Color, accent_color: Color) -> StyleBoxFlat:
+	var style: StyleBoxFlat = StyleBoxFlat.new()
+	style.bg_color = bg_color
+	style.corner_radius_top_left = 14
+	style.corner_radius_top_right = 14
+	style.corner_radius_bottom_left = 2
+	style.corner_radius_bottom_right = 2
+	style.border_width_left = 3
+	style.border_width_top = 3
+	style.border_width_right = 3
+	style.border_width_bottom = 0
+	style.border_color = Color(accent_color.r, accent_color.g, accent_color.b, 0.85)
+	return style
+
+
+func _finish_scene() -> void:
+	var eye_trans: Node = get_node_or_null("/root/EyeTransition")
+	if eye_trans == null and ResourceLoader.exists("res://EyeTransition.gd"):
+		eye_trans = load("res://EyeTransition.gd").new()
+		get_tree().root.add_child(eye_trans)
+
+	if eye_trans != null and ResourceLoader.exists(next_scene_path):
+		eye_trans.ir_a_escena_cerrando_ojos(next_scene_path)
+	elif ResourceLoader.exists(next_scene_path):
+		get_tree().change_scene_to_file(next_scene_path)
