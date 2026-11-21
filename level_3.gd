@@ -17,6 +17,8 @@ const DIALOGUE_PANEL_SIZE: Vector2 = Vector2(1280.0, 240.0)
 const DIALOGUE_PANEL_POS: Vector2 = Vector2(1280.0, 1835.0)
 const DIALOGUE_PANEL_LEFT_POS: Vector2 = Vector2(72.0, 1835.0)
 const TOC_PANEL_POS: Vector2 = Vector2(72.0, 56.0)
+const PARALLEL_MIND_PANEL_POS: Vector2 = Vector2(72.0, 56.0)
+const PARALLEL_MIND_PANEL_SIZE: Vector2 = Vector2(1280.0, 260.0)
 const TOP_RIGHT_INSTRUCTION_SIZE: Vector2 = Vector2(880.0, 150.0)
 const TOP_RIGHT_INSTRUCTION_POS: Vector2 = Vector2(2888.0, 56.0)
 const SPEAKER_PANEL_SIZE: Vector2 = Vector2(300.0, 62.0)
@@ -46,6 +48,7 @@ var base_art_rect: TextureRect
 var reveal_art_rect: TextureRect
 var reveal_material: ShaderMaterial
 var guide_canvas: Control
+var black_screen_rect: ColorRect
 
 var jammy_hand_rect: TextureRect
 var xcarlet_hand_rect: TextureRect
@@ -58,10 +61,14 @@ var kawaii_bar_bg: Panel
 var kawaii_bar_fill: ColorRect
 var kawaii_threshold_mark: ColorRect
 
-# Cuadro rojo del TOC con tres puntos fijos centrados (mismo tamaño que el cuadro de diálogo)
+# Cuadro rojo del TOC con tres puntos fijos centrados (sin etiqueta de Jammy)
 var thought_dots_panel: Panel
 var thought_dots_label: Label
 var thought_dots_tween: Tween
+
+# Cuadro rojo paralelo en la esquina superior izquierda (sin etiqueta de Jammy)
+var parallel_mind_panel: Panel
+var parallel_mind_label: Label
 
 # Cartel blanco de instrucciones homogenizado
 var instruction_panel: Panel
@@ -111,6 +118,10 @@ enum Phase {
 	JAMMY_4_BOTH_SIGNATURE,
 	WAIT_SUNSHINE_XCARLET_QUESTION,
 	WAIT_SUNSHINE_JAMMY_RESPONSE,
+	WAIT_AFTER_LEVEL3_XCARLET_INVITE,
+	WAIT_AFTER_LEVEL3_JAMMY_ACCEPT,
+	WAIT_AFTER_LEVEL3_XCARLET_GOODBYE,
+	WAIT_AFTER_LEVEL3_BLACK_SCREEN,
 	WAIT_DELAYED_DIALOGUES,
 	FINISHED
 }
@@ -125,9 +136,11 @@ var active_jammy_ink_pts: PackedVector2Array = PackedVector2Array()
 var active_xcarlet_ink_pts: PackedVector2Array = PackedVector2Array()
 var active_signatures_split_x: float = 3502.0
 
-# Cola de cuadros de diálogo divididos (evita desbordamientos y conserva diálogos atrasados)
+# Colas de cuadros divididos (evita desbordamientos tanto abajo como en el cuadro rojo)
 var dialogue_queue: Array[Dictionary] = []
 var dialogue_queue_idx: int = 0
+var parallel_mind_queue: Array[String] = []
+var parallel_mind_queue_idx: int = 0
 
 # Control bidireccional desde cualquier extremo/punto sobre la línea punteada
 var active_guide_points: PackedVector2Array = PackedVector2Array()
@@ -384,11 +397,22 @@ void fragment() {
 	jammy_hand_rect.texture = _load_hand_texture_sharp(["brazoJammy"])
 	ui_root.add_child(jammy_hand_rect)
 
+	black_screen_rect = ColorRect.new()
+	black_screen_rect.position = Vector2.ZERO
+	black_screen_rect.size = BASE_SIZE
+	black_screen_rect.color = Color.BLACK
+	black_screen_rect.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	black_screen_rect.z_index = 9
+	black_screen_rect.visible = false
+	ui_root.add_child(black_screen_rect)
+
 	_build_kawaii_accuracy_bar()
 	_build_thought_dots_badge()
+	_build_parallel_mind_box()
 	_build_homogenized_boxes()
 
 	pencil_player = AudioStreamPlayer.new()
+	pencil_player.bus = &"Master"
 	pencil_player.volume_db = 0.0
 	pencil_player.finished.connect(_on_pencil_player_finished)
 	add_child(pencil_player)
@@ -493,6 +517,95 @@ func _build_thought_dots_badge() -> void:
 	thought_dots_panel.add_child(thought_dots_label)
 
 
+func _build_parallel_mind_box() -> void:
+	parallel_mind_panel = Panel.new()
+	parallel_mind_panel.position = PARALLEL_MIND_PANEL_POS
+	parallel_mind_panel.size = PARALLEL_MIND_PANEL_SIZE
+	parallel_mind_panel.z_index = 15
+	parallel_mind_panel.visible = false
+	parallel_mind_panel.add_theme_stylebox_override(
+		"panel",
+		_make_dialogue_style(MIND_PANEL_COLOR, Color(MIND_COLOR.r, MIND_COLOR.g, MIND_COLOR.b, 0.88))
+	)
+	ui_root.add_child(parallel_mind_panel)
+
+	parallel_mind_label = Label.new()
+	parallel_mind_label.position = Vector2(44.0, 20.0)
+	parallel_mind_label.size = Vector2(PARALLEL_MIND_PANEL_SIZE.x - 88.0, PARALLEL_MIND_PANEL_SIZE.y - 40.0)
+	parallel_mind_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	parallel_mind_label.clip_text = true
+	parallel_mind_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	parallel_mind_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	parallel_mind_label.add_theme_font_size_override("font_size", 38)
+	if rock_salt_font:
+		parallel_mind_label.add_theme_font_override("font", rock_salt_font)
+	elif fredoka_font:
+		parallel_mind_label.add_theme_font_override("font", fredoka_font)
+	parallel_mind_label.add_theme_color_override("font_color", MIND_COLOR)
+	parallel_mind_label.add_theme_color_override("font_shadow_color", Color("#000000e6"))
+	parallel_mind_label.add_theme_constant_override("shadow_offset_x", 3)
+	parallel_mind_label.add_theme_constant_override("shadow_offset_y", 3)
+	parallel_mind_panel.add_child(parallel_mind_label)
+
+
+func _split_text_for_parallel_mind_box(raw_text: String) -> Array[String]:
+	var font: Font = rock_salt_font if rock_salt_font != null else fredoka_font
+	var font_size: int = 38
+	var max_width: float = PARALLEL_MIND_PANEL_SIZE.x - 120.0
+	var max_height: float = PARALLEL_MIND_PANEL_SIZE.y - 72.0
+
+	var has_start_marker: bool = raw_text.begins_with("*")
+	var has_end_marker: bool = raw_text.ends_with("*")
+	var inner_text: String = raw_text.trim_prefix("*").trim_suffix("*")
+
+	var full_marked: String = _apply_thought_markers(inner_text, has_start_marker, has_end_marker)
+	if _fits_in_dialogue_box(full_marked, font, font_size, max_width, max_height):
+		return [full_marked]
+
+	var pages: Array[String] = []
+	var chunk: String = ""
+	for word: String in inner_text.split(" "):
+		var candidate: String = word if chunk.is_empty() else chunk + " " + word
+		var marked_candidate: String = _apply_thought_markers(candidate, has_start_marker, has_end_marker)
+		if not chunk.is_empty() and not _fits_in_dialogue_box(marked_candidate, font, font_size, max_width, max_height):
+			pages.append(_apply_thought_markers(chunk, has_start_marker, false))
+			has_start_marker = false
+			chunk = word
+		else:
+			chunk = candidate
+
+	if not chunk.is_empty():
+		pages.append(_apply_thought_markers(chunk, has_start_marker, has_end_marker))
+
+	return pages
+
+
+func _has_more_parallel_mind() -> bool:
+	return parallel_mind_queue_idx + 1 < parallel_mind_queue.size()
+
+
+func _render_parallel_mind_entry(page_text: String) -> void:
+	if parallel_mind_panel == null:
+		return
+	parallel_mind_label.text = page_text
+	parallel_mind_panel.visible = true
+
+
+func _show_parallel_mind(red_text: String) -> void:
+	if parallel_mind_panel == null:
+		return
+	parallel_mind_queue = _split_text_for_parallel_mind_box(red_text)
+	parallel_mind_queue_idx = 0
+	_render_parallel_mind_entry(parallel_mind_queue[0])
+
+
+func _hide_parallel_mind() -> void:
+	parallel_mind_queue.clear()
+	parallel_mind_queue_idx = 0
+	if parallel_mind_panel != null:
+		parallel_mind_panel.visible = false
+
+
 func _show_thought_dots_from_jammy() -> void:
 	if thought_dots_tween != null and thought_dots_tween.is_valid():
 		thought_dots_tween.kill()
@@ -572,7 +685,8 @@ func _build_homogenized_boxes() -> void:
 	ui_root.add_child(speaker_panel)
 
 	speaker_label = Label.new()
-	speaker_label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	speaker_label.position = Vector2.ZERO
+	speaker_label.size = SPEAKER_PANEL_SIZE
 	speaker_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	speaker_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	speaker_label.add_theme_font_size_override("font_size", 36)
@@ -635,7 +749,7 @@ func _hide_dialogue() -> void:
 
 
 func _update_dialogue_prompt(is_blocking_wait: bool) -> void:
-	if _has_more_dialogues():
+	if _has_more_dialogues() or _has_more_parallel_mind():
 		_show_white_instruction("[center]Press [lb]ENTER[rb] to move to the next dialogue.[/center]", true)
 	elif is_blocking_wait:
 		_show_white_instruction("[center]Press [lb]ENTER[rb] to continue.[/center]", true)
@@ -923,7 +1037,6 @@ func _analyze_both_signatures() -> Dictionary:
 	if span_x < 80.0:
 		return result
 
-	# Buscar el hueco vacío entre la firma de Jammy (izquierda) y la de Xcarlet (derecha)
 	var bins: int = 40
 	var counts: Array[int] = []
 	counts.resize(bins)
@@ -992,7 +1105,6 @@ func _build_smooth_cat_signature_strokes(cat_rect: Rect2, min_allowed_x: float) 
 
 	var strokes: Array[PackedVector2Array] = []
 
-	# 1. Letras a la izquierda de la cabecita ("xcarlet")
 	var lx: float = maxf(r.position.x + r.size.x * 0.14, min_allowed_x + 12.0)
 	strokes.append(PackedVector2Array([
 		Vector2(lx + 18.0, r.position.y + r.size.y * 0.22),
@@ -1000,7 +1112,6 @@ func _build_smooth_cat_signature_strokes(cat_rect: Rect2, min_allowed_x: float) 
 		Vector2(lx + 14.0, r.position.y + r.size.y * 0.84)
 	]))
 
-	# 2. Contorno de la cara del gatito
 	var head_pts: PackedVector2Array = PackedVector2Array()
 	var steps: int = 26
 	for i: int in range(steps + 1):
@@ -1009,21 +1120,18 @@ func _build_smooth_cat_signature_strokes(cat_rect: Rect2, min_allowed_x: float) 
 		head_pts.append(Vector2(px, cy + sin(a) * ry))
 	strokes.append(head_pts)
 
-	# 3. Oreja izquierda
 	strokes.append(PackedVector2Array([
 		Vector2(maxf(cx - rx * 0.72, min_allowed_x + 10.0), cy - ry * 0.62),
 		Vector2(maxf(cx - rx * 0.48, min_allowed_x + 12.0), r.position.y + r.size.y * 0.08),
 		Vector2(maxf(cx - rx * 0.10, min_allowed_x + 14.0), cy - ry * 0.84)
 	]))
 
-	# 4. Oreja derecha
 	strokes.append(PackedVector2Array([
 		Vector2(cx + rx * 0.12, cy - ry * 0.84),
 		Vector2(cx + rx * 0.50, r.position.y + r.size.y * 0.08),
 		Vector2(cx + rx * 0.72, cy - ry * 0.62)
 	]))
 
-	# 5. Estrellita / cruz arriba a la derecha
 	var sx: float = r.position.x + r.size.x * 0.88
 	var sy: float = r.position.y + r.size.y * 0.20
 	var sr: float = maxf(r.size.x * 0.09, 12.0)
@@ -1036,7 +1144,6 @@ func _build_smooth_cat_signature_strokes(cat_rect: Rect2, min_allowed_x: float) 
 		Vector2(sx - sr, sy + sr)
 	]))
 
-	# 6. Ojitos y boquita
 	strokes.append(PackedVector2Array([
 		Vector2(maxf(cx - rx * 0.44, min_allowed_x + 12.0), cy - ry * 0.08),
 		Vector2(cx - rx * 0.10, cy - ry * 0.12),
@@ -1067,6 +1174,9 @@ func _start_phase(phase: Phase) -> void:
 	match phase:
 		Phase.AUTO_XCARLET_1:
 			_hide_dialogue()
+			_hide_parallel_mind()
+			if black_screen_rect != null:
+				black_screen_rect.visible = false
 			await _set_camera_zoom(1.0, Vector2(0.5, 0.5), 0.1)
 			_set_exclusive_hand("xcarlet")
 			base_art_rect.texture = null
@@ -1111,7 +1221,7 @@ func _start_phase(phase: Phase) -> void:
 
 			_start_dialogue(
 				"Jammy",
-				"*but you know, this time I can see a numb sunshine that has managed to break through this gray fog of false sunshine. It's not something incredible, but in my life full of sadness, that's a big win.*",
+				"*But you know, this time I can see a numb sunshine that has managed to break through this gray fog of false sunshine. It's not something incredible, but in my life full of sadness, that's a big win.*",
 				JAMMY_COLOR,
 				false,
 				false
@@ -1197,7 +1307,7 @@ func _start_phase(phase: Phase) -> void:
 			reveal_art_rect.texture = tex_xcarlet_3
 			_clear_mask(0.0)
 
-			_start_dialogue("Xcarlet", "Ohh, I see—a bleeding heart. Let's heal it.", XCARLET_COLOR, false, false)
+			_start_dialogue("Xcarlet", "Oh, I see—a bleeding heart. Let's heal it.", XCARLET_COLOR, false, false)
 			await _animate_xcarlet_bandaid()
 			await _retract_hand_down(xcarlet_hand_rect)
 
@@ -1298,6 +1408,7 @@ func _start_phase(phase: Phase) -> void:
 
 		Phase.FINISHED:
 			_hide_dialogue()
+			_hide_parallel_mind()
 			_set_exclusive_hand("none")
 			_finish_scene()
 
@@ -1385,6 +1496,10 @@ func _is_blocking_wait_phase() -> bool:
 		Phase.WAIT_KNIFE_JAMMY_RESPONSE,
 		Phase.WAIT_SUNSHINE_XCARLET_QUESTION,
 		Phase.WAIT_SUNSHINE_JAMMY_RESPONSE,
+		Phase.WAIT_AFTER_LEVEL3_XCARLET_INVITE,
+		Phase.WAIT_AFTER_LEVEL3_JAMMY_ACCEPT,
+		Phase.WAIT_AFTER_LEVEL3_XCARLET_GOODBYE,
+		Phase.WAIT_AFTER_LEVEL3_BLACK_SCREEN,
 		Phase.WAIT_DELAYED_DIALOGUES,
 		Phase.FINISHED
 	]
@@ -1393,9 +1508,16 @@ func _is_blocking_wait_phase() -> bool:
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
 		if event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
+			var advanced_any: bool = false
 			if _has_more_dialogues():
 				dialogue_queue_idx += 1
 				_render_dialogue_entry(dialogue_queue[dialogue_queue_idx])
+				advanced_any = true
+			if _has_more_parallel_mind():
+				parallel_mind_queue_idx += 1
+				_render_parallel_mind_entry(parallel_mind_queue[parallel_mind_queue_idx])
+				advanced_any = true
+			if advanced_any:
 				_update_dialogue_prompt(_is_blocking_wait_phase())
 				return
 
@@ -1414,7 +1536,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				Phase.WAIT_KNIFE_XCARLET_REACTION:
 					_start_dialogue(
 						"Jammy",
-						"It's because a heart like this never stops its suffering and just wishes to die, cuz it seems to be the easier way to turn off the false sunshine, which just worsens the situation with its melancholic light—but it hasn't been able to do it.",
+						"It's because a heart like this never stops its suffering and just wishes to die, 'cause it seems to be the easier way to turn off the false sunshine, which just worsens the situation with its melancholic light—but it hasn't been able to do it.",
 						JAMMY_COLOR,
 						false,
 						true
@@ -1425,13 +1547,63 @@ func _unhandled_input(event: InputEvent) -> void:
 				Phase.WAIT_SUNSHINE_XCARLET_QUESTION:
 					_start_dialogue(
 						"Jammy",
-						"Cuz it's false sunshine. It isn't warm and cheerful light—it's just a draining thing.",
+						"'Cause it's false sunshine. It isn't warm and cheerful light—it's just a draining thing.",
 						JAMMY_COLOR,
 						false,
 						true
 					)
 					current_phase = Phase.WAIT_SUNSHINE_JAMMY_RESPONSE
 				Phase.WAIT_SUNSHINE_JAMMY_RESPONSE:
+					_hide_parallel_mind()
+					_start_dialogue(
+						"Xcarlet",
+						"Well, well... We can't miss this opportunity to celebrate the wonderful drawing we just made at the fair. Are you in?",
+						XCARLET_COLOR,
+						false,
+						true
+					)
+					current_phase = Phase.WAIT_AFTER_LEVEL3_XCARLET_INVITE
+				Phase.WAIT_AFTER_LEVEL3_XCARLET_INVITE:
+					_start_dialogue(
+						"Jammy",
+						"Yeah, anyway, with a cause or without one, I wouldn't miss the opportunity to join such a pretty girl.",
+						JAMMY_COLOR,
+						false,
+						false
+					)
+					_show_parallel_mind(
+						"*It'll end badly. It'll end badly. You, trying to have a deep relationship? You're plastic—just a mentally sick person trying not to lose control in front of everyone. Can you hear your heart beating that fast? Huh? Piece of shit.*"
+					)
+					current_phase = Phase.WAIT_AFTER_LEVEL3_JAMMY_ACCEPT
+					_update_dialogue_prompt(true)
+				Phase.WAIT_AFTER_LEVEL3_JAMMY_ACCEPT:
+					_hide_parallel_mind()
+					_start_dialogue(
+						"Xcarlet",
+						"Uhh? Okayyyy, soooo, see ya tonight, baddie and mystical girl.",
+						XCARLET_COLOR,
+						false,
+						true
+					)
+					current_phase = Phase.WAIT_AFTER_LEVEL3_XCARLET_GOODBYE
+				Phase.WAIT_AFTER_LEVEL3_XCARLET_GOODBYE:
+					_set_exclusive_hand("none")
+					if black_screen_rect != null:
+						black_screen_rect.visible = true
+					_start_dialogue(
+						"Jammy",
+						"*My last words of this day before I fall asleep with my eyes closed are that it's so satisfying to go to bed knowing that a fraction of my day was composed of butterflies in my stomach. I've forgotten what the sensation of being happy feels like. All of this is fair, 'cause everybody deserves sunshine. I can't wait for tomorrow.*",
+						JAMMY_COLOR,
+						false,
+						false
+					)
+					_show_parallel_mind(
+						"*You'll feel so bad tomorrow, as usual. You'll keep trying to feel better, and relief won't arrive until you go to bed, wishing you could repeat the whole experience again. Because of OCD, you'll never get a girlfriend, 'cause nobody wants to fall in love with an annoying person like you. Sad, but it's your reality.*"
+					)
+					current_phase = Phase.WAIT_AFTER_LEVEL3_BLACK_SCREEN
+					_update_dialogue_prompt(true)
+				Phase.WAIT_AFTER_LEVEL3_BLACK_SCREEN:
+					_hide_parallel_mind()
 					_start_phase(Phase.FINISHED)
 				Phase.FINISHED:
 					_finish_scene()
@@ -1585,7 +1757,6 @@ func _complete_current_stroke() -> void:
 	var reveal_r: int = jammy_strokes_queue[current_stroke_idx].get("reveal_radius", 14)
 
 	if current_phase == Phase.JAMMY_4_BOTH_SIGNATURE and finished_stroke_name == "jammy_spiral_signature":
-		# Revelar de inmediato y por completo cada trazo de la firma de Jammy (sin cajas rectangulares)
 		for p: Vector2 in _resample_polyline(pts, 4.0):
 			_paint_mask_circle_no_update(p, 8, 1.0, -99999.0, active_signatures_split_x - 6.0)
 		for ink_pt: Vector2 in active_jammy_ink_pts:
@@ -1599,7 +1770,7 @@ func _complete_current_stroke() -> void:
 	if current_phase == Phase.JAMMY_2_WOUND_DROPS_PUDDLE and finished_stroke_name == "wound_contour":
 		_start_dialogue(
 			"Jammy",
-			"*A heart full of wounds that bleeds black blood, cuz its suffering has wiped any color out.*",
+			"*A heart full of wounds that bleeds black blood, 'cause its suffering has wiped any color out.*",
 			JAMMY_COLOR,
 			false,
 			false
@@ -1661,7 +1832,7 @@ func _execute_post_jammy_phase(completed_phase: Phase) -> void:
 			await _retract_hand_down(jammy_hand_rect)
 
 			current_phase = Phase.WAIT_KNIFE_XCARLET_REACTION
-			_start_dialogue("Xcarlet", "Ohh, you're mad, sis—another wound? Why?", XCARLET_COLOR, false, true)
+			_start_dialogue("Xcarlet", "Oh, you're mad, sis—another wound? Why?", XCARLET_COLOR, false, true)
 
 		Phase.JAMMY_4_BOTH_SIGNATURE:
 			_hide_dialogue()
@@ -1875,7 +2046,6 @@ func _animate_xcarlet_cat_signature(xcarlet_rect: Rect2, xcarlet_ink: PackedVect
 		)
 		_stop_pencil_sound()
 
-	# Completar únicamente los píxeles de tinta de Xcarlet sin invadir la firma de Jammy
 	for ink_pt: Vector2 in xcarlet_ink:
 		_paint_mask_circle_no_update(ink_pt, 7, 1.0, min_x_guard, 99999.0)
 	mask_texture.update(mask_image)
@@ -1884,22 +2054,17 @@ func _animate_xcarlet_cat_signature(xcarlet_rect: Rect2, xcarlet_ink: PackedVect
 func _animate_jammy_yellow_light() -> void:
 	_set_exclusive_hand("jammy")
 
-	# Trazos de resplandor y rayos largos con grosor de lápiz real (sin silueta redondeada)
 	var sun_strokes: Array[Array] = [
-		# Rayos superiores y diagonales largos
 		[Vector2(0.476, 0.340), Vector2(0.476, 0.080)],
 		[Vector2(0.425, 0.355), Vector2(0.240, 0.110)],
 		[Vector2(0.528, 0.355), Vector2(0.715, 0.110)],
-		# Rayos laterales amplios
 		[Vector2(0.565, 0.430), Vector2(0.840, 0.285)],
 		[Vector2(0.575, 0.515), Vector2(0.865, 0.525)],
 		[Vector2(0.555, 0.595), Vector2(0.810, 0.775)],
-		# Rayo inferior y rayos izquierdos
 		[Vector2(0.476, 0.655), Vector2(0.476, 0.895)],
 		[Vector2(0.398, 0.595), Vector2(0.145, 0.775)],
 		[Vector2(0.378, 0.515), Vector2(0.095, 0.525)],
 		[Vector2(0.388, 0.430), Vector2(0.115, 0.285)],
-		# Pasadas diagonales de luz alrededor del corazón
 		[Vector2(0.360, 0.320), Vector2(0.430, 0.260), Vector2(0.525, 0.265), Vector2(0.595, 0.325)],
 		[Vector2(0.605, 0.380), Vector2(0.635, 0.495), Vector2(0.600, 0.625)],
 		[Vector2(0.350, 0.380), Vector2(0.320, 0.495), Vector2(0.355, 0.625)]
@@ -1909,7 +2074,6 @@ func _animate_jammy_yellow_light() -> void:
 		await _sweep_hand_along_path(jammy_hand_rect, JAMMY_TIP_UV, _norm_to_screen(stroke_pts), 0.15, 24, 1.0)
 		_stop_pencil_sound()
 
-	# Fundido suave del brillo ambiental restante para evitar cortes bruscos
 	await _fade_complete_mask(0.45)
 
 
@@ -2127,7 +2291,7 @@ func _apply_thought_markers(text: String, add_start: bool, add_end: bool) -> Str
 
 func _split_text_for_dialogue_box(raw_text: String, is_mind: bool) -> Array[String]:
 	var font: Font = rock_salt_font if is_mind else fredoka_font
-	var font_size: int = 36 if is_mind else 46
+	var font_size: int = 38 if is_mind else 46
 	var max_width: float = DIALOGUE_PANEL_SIZE.x - 130.0
 	var max_height: float = 145.0 if is_mind else 156.0
 
@@ -2199,21 +2363,17 @@ func _render_dialogue_entry(entry: Dictionary) -> void:
 		dialogue_label.add_theme_color_override("font_color", MIND_COLOR)
 		if rock_salt_font:
 			dialogue_label.add_theme_font_override("font", rock_salt_font)
-		dialogue_label.add_theme_font_size_override("font_size", 36)
+		dialogue_label.add_theme_font_size_override("font_size", 38)
 		dialogue_label.add_theme_constant_override("outline_size", 0)
 		dialogue_label.add_theme_color_override("font_shadow_color", Color("#000000e6"))
 		dialogue_label.add_theme_constant_override("shadow_offset_x", 3)
 		dialogue_label.add_theme_constant_override("shadow_offset_y", 3)
 
-		var j_border: Color = Color(JAMMY_COLOR.r, JAMMY_COLOR.g, JAMMY_COLOR.b, 0.85)
-		dialogue_panel.add_theme_stylebox_override("panel", _make_dialogue_style(MIND_PANEL_COLOR, j_border))
-
-		speaker_panel.visible = true
-		speaker_panel.position = Vector2(panel_pos.x + 36.0, panel_pos.y - SPEAKER_PANEL_SIZE.y + 2.0)
-		speaker_panel.size = SPEAKER_PANEL_SIZE
-		speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, JAMMY_COLOR))
-		speaker_label.text = speaker
-		speaker_label.add_theme_color_override("font_color", JAMMY_COLOR)
+		dialogue_panel.add_theme_stylebox_override(
+			"panel",
+			_make_dialogue_style(MIND_PANEL_COLOR, Color(MIND_COLOR.r, MIND_COLOR.g, MIND_COLOR.b, 0.88))
+		)
+		speaker_panel.visible = false
 	else:
 		dialogue_label.add_theme_color_override("font_color", NORMAL_BLACK_TEXT_COLOR)
 		if fredoka_font:
@@ -2268,6 +2428,7 @@ func _make_speaker_style(bg_color: Color, accent_color: Color) -> StyleBoxFlat:
 
 
 func _finish_scene() -> void:
+	_hide_parallel_mind()
 	var eye_trans: Node = get_node_or_null("/root/EyeTransition")
 	if eye_trans == null and ResourceLoader.exists("res://EyeTransition.gd"):
 		eye_trans = load("res://EyeTransition.gd").new()
