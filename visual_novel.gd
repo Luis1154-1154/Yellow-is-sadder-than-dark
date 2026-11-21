@@ -29,14 +29,13 @@ const HEARTBEAT_STREAM = preload("res://assets/sounds/Hbeating1.mp3")
 const FOCUS_EFFORT_STREAM = preload("res://assets/sounds/audioJuego1.mp3")
 const FOCUS_SUCCESS_STREAM = preload("res://assets/sounds/mixingGame1.mp3")
 
-# Dificultad aumentada del minijuego
-const FOCUS_EFFORT_MAX := 100.0
+# Dificultad alta del minijuego con ventana de 0.5 segundos
+const FOCUS_EFFORT_MIN_TARGET := 110.0
+const FOCUS_EFFORT_MAX_TARGET := 155.0
 const FOCUS_EFFORT_RATE := 14.5
-const FOCUS_EFFORT_DECAY := 85.0
-const FOCUS_WINDOW_TIME := 1.15
-const FOCUS_FAKEOUT_TIME := 0.065
+const FOCUS_WINDOW_TIME := 0.5
 const FOCUS_RESOLUTION_TIME := 5.5
-const FOCUS_CLIMAX_BLUR := 9.5
+const FOCUS_CLIMAX_BLUR := 8.5
 
 var background: TextureRect
 var black_background: ColorRect
@@ -73,7 +72,9 @@ var vn_focus_intro := true
 enum FocusState { EFFORT, WINDOW, RESOLUTION }
 var focus_state := FocusState.EFFORT
 var focus_effort := 0.0
+var focus_target_effort := 125.0
 var focus_window_timer := 0.0
+var focus_phase_wobble := 0.0
 var focus_image: TextureRect
 var focus_shader_material: ShaderMaterial
 var focus_instructions: RichTextLabel
@@ -81,13 +82,16 @@ var focus_vignette: ColorRect
 var focus_status: Label
 var focus_hint: Label
 var focus_fakeout_timer := 0.0
-var focus_fakeout_armed := true
-var focus_fakeout2_armed := true
+var focus_fakeout_points: Array[float] = []
+var focus_fakeout_index := 0
 var focus_exit_prompt := false
+var tex_focus_base: Texture2D
+var tex_focus_ugly: Texture2D
 var mixing_game_active := false
 var mixing_loop_start := 0.5
 
 func _ready() -> void:
+	randomize()
 	_build_audio()
 	_build_ui()
 	_build_script()
@@ -101,41 +105,65 @@ func _process(delta: float) -> void:
 		return
 	var is_pressing := Input.is_key_pressed(KEY_W) and Input.is_key_pressed(KEY_S)
 	_update_focus_music(is_pressing)
+	focus_phase_wobble += delta
+
 	if focus_fakeout_timer > 0.0:
+		_apply_focus_tension(true)
 		if not is_pressing:
-			focus_effort = 0.0
+			_abort_focus_attempt()
+			return
 		focus_fakeout_timer -= delta
-		if focus_fakeout_timer <= 0.0 or not is_pressing:
-			focus_image.texture = load("res://scenes/scene12.png")
-			focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+		if focus_fakeout_timer <= 0.0:
+			focus_image.texture = tex_focus_base
 			focus_fakeout_timer = 0.0
 		return
+
 	match focus_state:
 		FocusState.EFFORT:
 			if is_pressing:
-				focus_effort = min(focus_effort + FOCUS_EFFORT_RATE * delta, FOCUS_EFFORT_MAX)
+				var resistance := 0.62 + 0.52 * (0.5 + 0.5 * sin(focus_phase_wobble * 4.3)) + randf_range(-0.18, 0.22)
+				focus_effort = min(focus_effort + FOCUS_EFFORT_RATE * maxf(resistance, 0.35) * delta, focus_target_effort)
 			else:
-				focus_effort = max(focus_effort - FOCUS_EFFORT_DECAY * delta, 0.0)
-			_apply_focus_tension()
-			if focus_effort < 68.0:
-				focus_fakeout_armed = true
-			elif focus_effort >= 78.0 and focus_fakeout_armed:
-				focus_fakeout_armed = false
+				if focus_effort > 0.0:
+					_abort_focus_attempt()
+					return
+			_apply_focus_tension(false)
+			if focus_fakeout_index < focus_fakeout_points.size() and focus_effort >= focus_fakeout_points[focus_fakeout_index]:
+				focus_fakeout_index += 1
 				_begin_focus_fakeout()
-			if focus_effort < 86.0:
-				focus_fakeout2_armed = true
-			elif focus_effort >= 92.0 and focus_fakeout2_armed:
-				focus_fakeout2_armed = false
-				_begin_focus_fakeout()
-			if focus_effort >= FOCUS_EFFORT_MAX:
+			elif focus_effort >= focus_target_effort:
 				_begin_focus_window()
 		FocusState.WINDOW:
 			if not is_pressing:
 				_complete_focus()
 				return
+			_apply_focus_tension(true)
 			focus_window_timer -= delta
 			if focus_window_timer <= 0.0:
 				_reset_focus_cycle()
+
+func _abort_focus_attempt() -> void:
+	focus_effort = 0.0
+	focus_fakeout_timer = 0.0
+	focus_image.texture = tex_focus_base
+	focus_image.scale = Vector2.ONE
+	focus_image.position = Vector2.ZERO
+	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+	sonido_esfuerzo.pitch_scale = 0.85
+	sonido_esfuerzo.volume_db = 0.0
+	_roll_focus_cycle_params()
+
+func _roll_focus_cycle_params() -> void:
+	focus_target_effort = randf_range(FOCUS_EFFORT_MIN_TARGET, FOCUS_EFFORT_MAX_TARGET)
+	focus_fakeout_points.clear()
+	focus_fakeout_index = 0
+	var fakeout_count := randi_range(3, 4)
+	var cursor := randf_range(0.73, 0.78)
+	for i in fakeout_count:
+		if cursor >= 0.965:
+			break
+		focus_fakeout_points.append(focus_target_effort * cursor)
+		cursor += randf_range(0.048, 0.072)
 
 func _build_ui() -> void:
 	background = TextureRect.new()
@@ -521,13 +549,15 @@ func _start_focus() -> void:
 	focus_effort = 0.0
 	focus_window_timer = 0.0
 	focus_fakeout_timer = 0.0
-	focus_fakeout_armed = true
-	focus_fakeout2_armed = true
+	focus_phase_wobble = 0.0
+	tex_focus_base = load("res://scenes/scene12.png")
+	tex_focus_ugly = load("res://scenes/scene13.png")
+	_roll_focus_cycle_params()
 	focus_exit_prompt = false
 	speaker_panel.visible = false
 	background.texture = null
 	black_background.visible = false
-	focus_image.texture = load("res://scenes/scene12.png")
+	focus_image.texture = tex_focus_base
 	focus_image.visible = true
 	focus_image.scale = Vector2.ONE
 	focus_image.position = Vector2.ZERO
@@ -556,6 +586,8 @@ func _begin_focus_game() -> void:
 	focus_instructions.visible = false
 	focus_state = FocusState.EFFORT
 	focus_effort = 0.0
+	focus_phase_wobble = 0.0
+	_roll_focus_cycle_params()
 	continue_label.visible = false
 	focus_status.visible = false
 	focus_hint.visible = false
@@ -565,35 +597,47 @@ func _begin_focus_game() -> void:
 	sonido_esfuerzo.volume_db = 0.0
 	sonido_esfuerzo.play()
 
-func _apply_focus_tension() -> void:
-	var progress := focus_effort / FOCUS_EFFORT_MAX
-	var zoom := 1.0 + progress * 0.095
-	var shake := sin(Time.get_ticks_msec() * 0.052) * progress * 6.5
+func _apply_focus_tension(is_climax_or_fakeout: bool) -> void:
+	var raw_progress := clampf(focus_effort / focus_target_effort, 0.0, 1.0)
+	# Satura la tensión percibida al 68% para que el zoom/shake/tono no revelen el 100% real
+	var perceived := clampf(raw_progress / 0.68, 0.0, 1.0)
+	var wobble := 0.0
+	if raw_progress > 0.68:
+		wobble = sin(focus_phase_wobble * 9.5) * 0.5 + cos(focus_phase_wobble * 15.3) * 0.5
+
+	var zoom := 1.0 + perceived * 0.115 + wobble * 0.014
+	var shake_amp := perceived * 8.2 + absf(wobble) * 3.5
+	var shake := sin(Time.get_ticks_msec() * 0.062) * shake_amp
 	focus_image.scale = Vector2(zoom, zoom)
-	focus_image.position = Vector2(shake, cos(Time.get_ticks_msec() * 0.058) * progress * 4.0)
-	sonido_esfuerzo.pitch_scale = lerp(0.85, 1.75, progress)
-	sonido_esfuerzo.volume_db = lerp(0.0, 3.5, progress)
+	focus_image.position = Vector2(shake, cos(Time.get_ticks_msec() * 0.071) * shake_amp * 0.65)
+
+	if not is_climax_or_fakeout:
+		var erratic_blur := 0.0
+		if raw_progress > 0.65:
+			erratic_blur = clampf(2.4 + wobble * 3.2, 0.0, 6.2)
+		focus_shader_material.set_shader_parameter("blur_amount", erratic_blur)
+		sonido_esfuerzo.pitch_scale = clampf(lerp(0.85, 1.78, perceived) + wobble * 0.14, 0.85, 1.95)
+		sonido_esfuerzo.volume_db = lerp(0.0, 3.8, perceived)
 
 func _begin_focus_fakeout() -> void:
-	focus_fakeout_timer = FOCUS_FAKEOUT_TIME
-	focus_image.texture = load("res://scenes/scene13.png")
-	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
+	focus_fakeout_timer = randf_range(0.22, 0.35)
+	focus_image.texture = tex_focus_ugly
+	focus_shader_material.set_shader_parameter("blur_amount", FOCUS_CLIMAX_BLUR)
+	sonido_esfuerzo.volume_db = -8.0
 
 func _begin_focus_window() -> void:
 	focus_state = FocusState.WINDOW
 	focus_window_timer = FOCUS_WINDOW_TIME
-	focus_image.texture = load("res://scenes/scene13.png")
-	focus_image.scale = Vector2.ONE
-	focus_image.position = Vector2.ZERO
+	focus_image.texture = tex_focus_ugly
 	focus_shader_material.set_shader_parameter("blur_amount", FOCUS_CLIMAX_BLUR)
 	focus_vignette.visible = false
-	sonido_esfuerzo.stop()
-	sonido_corte.stream = cut_stream
-	sonido_corte.play()
+	sonido_esfuerzo.volume_db = -8.0
 
 func _complete_focus() -> void:
 	focus_state = FocusState.RESOLUTION
 	sonido_esfuerzo.stop()
+	sonido_corte.stream = cut_stream
+	sonido_corte.play()
 	focus_status.visible = false
 	focus_hint.visible = false
 	mind_heartbeat_player.stop()
@@ -609,14 +653,13 @@ func _complete_focus() -> void:
 	resolution_tween.tween_callback(_finish_resolution_effect)
 
 func _reset_focus_cycle() -> void:
-	focus_image.texture = load("res://scenes/scene12.png")
+	focus_image.texture = tex_focus_base
 	focus_image.visible = true
 	focus_state = FocusState.EFFORT
 	focus_effort = 0.0
 	focus_window_timer = 0.0
 	focus_fakeout_timer = 0.0
-	focus_fakeout_armed = true
-	focus_fakeout2_armed = true
+	_roll_focus_cycle_params()
 	focus_image.scale = Vector2.ONE
 	focus_image.position = Vector2.ZERO
 	focus_shader_material.set_shader_parameter("blur_amount", 0.0)
@@ -625,7 +668,8 @@ func _reset_focus_cycle() -> void:
 	vignette_material.set_shader_parameter("vignette_alpha", 0.0)
 	sonido_esfuerzo.pitch_scale = 0.85
 	sonido_esfuerzo.volume_db = 0.0
-	sonido_esfuerzo.play()
+	if not sonido_esfuerzo.playing:
+		sonido_esfuerzo.play()
 
 func _update_focus_music(is_pressing: bool) -> void:
 	if not is_pressing:

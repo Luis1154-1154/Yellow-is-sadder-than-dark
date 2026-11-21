@@ -4,7 +4,7 @@ signal nivel_completado
 
 # --- AJUSTES RÁPIDOS EN EL INSPECTOR DE LEVEL2 ---
 @export var background_texture: Texture2D
-@export_file("*.tscn") var siguiente_escena: String = "" # Escena a cargar al presionar ENTER en la instrucción final
+@export_file("*.tscn") var siguiente_escena: String = "" # Si se deja vacío, busca scene15.tscn automáticamente
 @export var piso_y: float = 1820.0                        # Altura de la banqueta donde pisan los personajes
 @export var escala_gato: float = 1.0                      # Tamaño de Kitty (su ancho define cada paso)
 @export var escala_persona: float = 1.0                   # Tamaño de la persona y la bolsa
@@ -56,6 +56,7 @@ enum Estado {
 	INSTRUCCION_FINAL
 }
 var estado_actual: Estado = Estado.DIALOGO_KITTY
+var transicionando_escena: bool = false
 
 const VOCALES: Array[String] = ["A", "E", "I", "O", "U"]
 var teclas_objetivo: Array[String] = []
@@ -450,15 +451,78 @@ func mostrar_instruccion_final() -> void:
 	)
 
 
+func _buscar_archivo_en_proyecto(nombres_objetivo: Array[String], carpeta: String = "res://") -> String:
+	var dir := DirAccess.open(carpeta)
+	if dir == null:
+		return ""
+	
+	dir.list_dir_begin()
+	var item: String = dir.get_next()
+	var subcarpetas: Array[String] = []
+	
+	while item != "":
+		if not item.begins_with("."):
+			var ruta_completa: String = (carpeta + item) if carpeta == "res://" else (carpeta + "/" + item)
+			if dir.current_is_dir():
+				subcarpetas.append(ruta_completa)
+			else:
+				for objetivo in nombres_objetivo:
+					if item.to_lower() == objetivo.to_lower():
+						dir.list_dir_end()
+						return ruta_completa
+		item = dir.get_next()
+	dir.list_dir_end()
+	
+	for sub in subcarpetas:
+		var encontrado: String = _buscar_archivo_en_proyecto(nombres_objetivo, sub)
+		if not encontrado.is_empty():
+			return encontrado
+	return ""
+
+
 func _continuar_siguiente_escena() -> void:
+	if transicionando_escena:
+		return
+	transicionando_escena = true
+	
+	var destino: String = siguiente_escena.strip_edges()
+	if destino.is_empty() or not ResourceLoader.exists(destino):
+		for candidata in [
+			"res://scenes/scene15.tscn",
+			"res://scene15.tscn",
+			"res://scenes/scene_15.tscn",
+			"res://scene_15.tscn"
+		]:
+			if ResourceLoader.exists(candidata):
+				destino = candidata
+				break
+	
+	if destino.is_empty() or not ResourceLoader.exists(destino):
+		destino = _buscar_archivo_en_proyecto(["scene15.tscn", "scene_15.tscn"])
+	
+	if destino.is_empty() or not ResourceLoader.exists(destino):
+		push_warning("No se encontró scene15.tscn en el proyecto.")
+		transicionando_escena = false
+		return
+	
 	var save_manager := get_node_or_null("/root/SaveManager")
 	if save_manager != null:
-		save_manager.guardar_progreso(siguiente_escena if siguiente_escena != "" else scene_file_path, "Level2")
+		save_manager.guardar_progreso(destino, "Level2")
 	
 	nivel_completado.emit()
 	
-	if siguiente_escena != "" and ResourceLoader.exists(siguiente_escena):
-		get_tree().change_scene_to_file(siguiente_escena)
+	var eye_trans: Node = get_node_or_null("/root/EyeTransition")
+	if eye_trans == null:
+		var ruta_eye: String = "res://EyeTransition.gd" if ResourceLoader.exists("res://EyeTransition.gd") else _buscar_archivo_en_proyecto(["EyeTransition.gd"])
+		if not ruta_eye.is_empty() and ResourceLoader.exists(ruta_eye):
+			eye_trans = load(ruta_eye).new()
+			get_tree().root.add_child(eye_trans)
+			await get_tree().process_frame
+	
+	if eye_trans != null and eye_trans.has_method("ir_a_escena_cerrando_ojos"):
+		eye_trans.ir_a_escena_cerrando_ojos(destino)
+	else:
+		get_tree().change_scene_to_file(destino)
 
 
 func iniciar_gameplay() -> void:

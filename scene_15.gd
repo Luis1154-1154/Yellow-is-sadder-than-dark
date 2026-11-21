@@ -27,7 +27,7 @@ const NORMAL_DIALOGUE_STREAM = preload("res://assets/sounds/Soft_pencil_tap_on_n
 const BREATHING_STREAM = preload("res://assets/sounds/breathing1.mp3")
 const HEARTBEAT_STREAM = preload("res://assets/sounds/Hbeating1.mp3")
 
-@export_file("*.tscn") var next_scene_path: String = "res://scenes/scene17.tscn"
+@export_file("*.tscn") var next_scene_path: String = "res://Level3.tscn"
 
 var ui_root: Control
 var background: TextureRect
@@ -54,6 +54,7 @@ var displayed_words := 0
 var current_words: PackedStringArray
 var current_entry: Dictionary
 var waiting_for_input := false
+var ending_triggered := false
 
 
 func _ready() -> void:
@@ -394,6 +395,9 @@ func _type_words(token: int) -> void:
 
 
 func _advance() -> void:
+	if ending_triggered:
+		return
+
 	if is_typing:
 		typing_token += 1
 		typewriter_player.stop()
@@ -544,17 +548,32 @@ func _update_ambience() -> void:
 
 
 func _show_ending() -> void:
+	if ending_triggered:
+		return
+	ending_triggered = true
+
 	waiting_for_input = false
 	is_typing = false
 	mind_heartbeat_player.stop()
 	mind_breath_player.stop()
 
-	var eye_trans := get_node_or_null("/root/EyeTransition")
-	if eye_trans == null and ResourceLoader.exists("res://EyeTransition.gd"):
-		eye_trans = load("res://EyeTransition.gd").new()
-		get_tree().root.add_child(eye_trans)
+	var destino := "res://Level3.tscn"
+	if not ResourceLoader.exists(destino):
+		push_error("No existe res://Level3.tscn")
+		ending_triggered = false
+		return
 
-	if eye_trans != null and ResourceLoader.exists(next_scene_path):
-		eye_trans.ir_a_escena_cerrando_ojos(next_scene_path)
-	elif ResourceLoader.exists(next_scene_path):
-		get_tree().change_scene_to_file(next_scene_path)
+	var save_manager := get_node_or_null("/root/SaveManager")
+	if save_manager != null:
+		save_manager.guardar_progreso(destino, "scene15")
+
+	var packed := ResourceLoader.load(destino) as PackedScene
+	if packed == null:
+		push_error("No se pudo cargar Level3.tscn. Revisa si hay un error rojo en level_3.gd.")
+		ending_triggered = false
+		return
+
+	var err := get_tree().change_scene_to_packed(packed)
+	if err != OK:
+		push_error("Error al cambiar a Level3.tscn: " + str(err))
+		ending_triggered = false
