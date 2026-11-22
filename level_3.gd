@@ -40,7 +40,7 @@ const STEP_MAX_DIST: float = 17.0
 const OFF_PATH_ZERO_DIST: float = 30.0
 const MIN_COVERAGE_RATIO: float = 0.95
 
-@export_file("*.tscn") var next_scene_path: String = "res://scenes/scene17.tscn"
+@export_file("*.tscn") var next_scene_path: String = "res://scenes/fairScenes.tscn"
 
 var ui_root: Control
 var canvas_container: Control
@@ -2429,12 +2429,13 @@ func _make_speaker_style(bg_color: Color, accent_color: Color) -> StyleBoxFlat:
 
 func _finish_scene() -> void:
 	_hide_parallel_mind()
-	var eye_trans: Node = get_node_or_null("/root/EyeTransition")
-	if eye_trans == null and ResourceLoader.exists("res://EyeTransition.gd"):
-		eye_trans = load("res://EyeTransition.gd").new()
-		get_tree().root.add_child(eye_trans)
+	var target_scene: String = next_scene_path
+	if not ResourceLoader.exists(target_scene) and ResourceLoader.exists("res://fairScenes.tscn"):
+		target_scene = "res://fairScenes.tscn"
 
-	if eye_trans != null and ResourceLoader.exists(next_scene_path):
-		eye_trans.ir_a_escena_cerrando_ojos(next_scene_path)
-	elif ResourceLoader.exists(next_scene_path):
-		get_tree().change_scene_to_file(next_scene_path)
+	var save_manager: Node = get_node_or_null("/root/SaveManager")
+	if save_manager != null and ResourceLoader.exists(target_scene):
+		save_manager.guardar_progreso(target_scene, "fairScenes")
+
+	if ResourceLoader.exists(target_scene):
+		get_tree().change_scene_to_file(target_scene)
