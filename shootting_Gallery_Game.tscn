@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://ce28fylx2inju"]
+
+[ext_resource type="Script" uid="uid://ct26gkt4bj5vv" path="res://shootting_gallery_game.gd" id="1_i6adi"]
+
+[node name="Node2D" type="Node2D" unique_id=649561398]
+script = ExtResource("1_i6adi")
