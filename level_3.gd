@@ -8,19 +8,19 @@ const PENCIL_SOUND_PATH: String = "res://assets/sounds/pencil.wav"
 const JAMMY_COLOR: Color = Color("#f5d08a")
 const XCARLET_COLOR: Color = Color("#5bc0eb")
 const MIND_COLOR: Color = Color("#ff5a5f")
+const ACCENT_COLOR: Color = Color("#fff9f0")
+const GOLD_ACCENT: Color = Color("#f5d08a")
 const NORMAL_BLACK_TEXT_COLOR: Color = Color("#161616")
 const NORMAL_WHITE_PANEL_COLOR: Color = Color(0.97, 0.96, 0.94, 0.94)
 const MIND_PANEL_COLOR: Color = Color(0.11, 0.11, 0.13, 0.94)
 const SPEAKER_BG_COLOR: Color = Color(0.14, 0.15, 0.17, 0.94)
 
 const DIALOGUE_PANEL_SIZE: Vector2 = Vector2(1280.0, 240.0)
-const DIALOGUE_PANEL_POS: Vector2 = Vector2(1280.0, 1835.0)
-const DIALOGUE_PANEL_LEFT_POS: Vector2 = Vector2(72.0, 1835.0)
-const TOC_PANEL_POS: Vector2 = Vector2(72.0, 56.0)
-const PARALLEL_MIND_PANEL_POS: Vector2 = Vector2(72.0, 56.0)
+const DIALOGUE_PANEL_POS: Vector2 = Vector2(1280.0, 1815.0)
+const DIALOGUE_PANEL_LEFT_POS: Vector2 = Vector2(72.0, 1815.0)
+const TOC_PANEL_POS: Vector2 = Vector2(72.0, 136.0)
+const PARALLEL_MIND_PANEL_POS: Vector2 = Vector2(72.0, 136.0)
 const PARALLEL_MIND_PANEL_SIZE: Vector2 = Vector2(1280.0, 260.0)
-const TOP_RIGHT_INSTRUCTION_SIZE: Vector2 = Vector2(880.0, 150.0)
-const TOP_RIGHT_INSTRUCTION_POS: Vector2 = Vector2(2888.0, 56.0)
 const SPEAKER_PANEL_SIZE: Vector2 = Vector2(300.0, 62.0)
 
 # Brazo escalado para cubrir todo el lienzo incluso con zoom sin cortar la manga
@@ -53,13 +53,28 @@ var black_screen_rect: ColorRect
 var jammy_hand_rect: TextureRect
 var xcarlet_hand_rect: TextureRect
 
-# Barra Kawaii de Accuracy (arriba a la derecha)
+# Barra Kawaii de Accuracy
 var kawaii_panel: Panel
 var kawaii_title_label: Label
 var kawaii_percent_label: Label
 var kawaii_bar_bg: Panel
 var kawaii_bar_fill: ColorRect
 var kawaii_threshold_mark: ColorRect
+
+# Recordatorios accesibles, espaciados y legibles: Enter, Menú (ESC) y Controles
+var hud_enter_panel: PanelContainer
+var hud_enter_label: Label
+var hud_menu_panel: PanelContainer
+var hud_menu_label: Label
+var hud_controls_panel: PanelContainer
+var hud_controls_label: Label
+
+# Modal de confirmación al salir con ESC
+var leave_confirm_overlay: ColorRect
+var leave_confirm_panel: PanelContainer
+var leave_yes_btn: Button
+var leave_no_btn: Button
+var leave_dialog_open: bool = false
 
 # Cuadro rojo del TOC con tres puntos fijos centrados (sin etiqueta de Jammy)
 var thought_dots_panel: Panel
@@ -70,7 +85,7 @@ var thought_dots_tween: Tween
 var parallel_mind_panel: Panel
 var parallel_mind_label: Label
 
-# Cartel blanco de instrucciones homogenizado
+# Cartel blanco de instrucciones homogenizado (usado solo al iniciar la fase interactiva)
 var instruction_panel: Panel
 var instruction_label: RichTextLabel
 var is_instruction_in_top_right: bool = false
@@ -165,15 +180,136 @@ var zoom_tween: Tween
 
 func _ready() -> void:
 	name = "Level3"
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	Input.set_mouse_mode(Input.MOUSE_MODE_HIDDEN)
 	_scan_characters_directory()
 	_load_all_assets()
 	_build_ui()
-	_start_phase(Phase.AUTO_XCARLET_1)
+	_build_leave_confirm_ui()
+	var fase_inicial: Phase = _resolver_fase_guardada()
+	_guardar_estado_level3(fase_inicial, 0)
+	_start_phase(fase_inicial)
 
 
 func _exit_tree() -> void:
 	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+
+func _obtener_slot_activo() -> int:
+	var save_mgr: Node = get_node_or_null("/root/SaveManager")
+	if save_mgr == null:
+		return 1
+	for prop in ["slot_actual", "current_slot", "active_slot", "selected_slot"]:
+		if prop in save_mgr:
+			var val = save_mgr.get(prop)
+			if typeof(val) == TYPE_INT and int(val) > 0:
+				return int(val)
+	return 1
+
+
+func _resolver_fase_guardada() -> Phase:
+	var extra_data: Dictionary = {}
+	if get_tree().has_meta("loaded_save_extra"):
+		var raw_meta = get_tree().get_meta("loaded_save_extra")
+		if raw_meta is Dictionary:
+			extra_data = raw_meta
+		get_tree().remove_meta("loaded_save_extra")
+
+	if extra_data.is_empty():
+		var save_mgr: Node = get_node_or_null("/root/SaveManager")
+		if save_mgr != null and "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
+			extra_data = save_mgr.extra_data
+
+	if extra_data.is_empty():
+		return Phase.AUTO_XCARLET_1
+
+	var raw_phase = extra_data.get("phase", extra_data.get("current_phase", extra_data.get("step", -1)))
+	var parsed_phase: int = -1
+	if typeof(raw_phase) == TYPE_INT or typeof(raw_phase) == TYPE_FLOAT:
+		parsed_phase = int(raw_phase)
+	elif typeof(raw_phase) == TYPE_STRING:
+		var s: String = str(raw_phase).strip_edges()
+		if s.is_valid_int():
+			parsed_phase = int(s)
+		elif Phase.has(s.to_upper()):
+			parsed_phase = int(Phase.get(s.to_upper()))
+
+	if parsed_phase < 0 or parsed_phase >= Phase.FINISHED:
+		return Phase.AUTO_XCARLET_1
+
+	match parsed_phase:
+		Phase.AUTO_XCARLET_1, Phase.WAIT_AFTER_XCARLET_1:
+			return Phase.AUTO_XCARLET_1
+		Phase.SHOW_INSTRUCTIONS:
+			return Phase.SHOW_INSTRUCTIONS
+		Phase.JAMMY_1_CHAIN:
+			return Phase.JAMMY_1_CHAIN
+		Phase.AUTO_XCARLET_2, Phase.WAIT_AFTER_XCARLET_2:
+			return Phase.AUTO_XCARLET_2
+		Phase.JAMMY_2_WOUND_DROPS_PUDDLE:
+			return Phase.JAMMY_2_WOUND_DROPS_PUDDLE
+		Phase.AUTO_XCARLET_3, Phase.WAIT_AFTER_XCARLET_3:
+			return Phase.AUTO_XCARLET_3
+		Phase.JAMMY_3_KNIFE_CUTS:
+			return Phase.JAMMY_3_KNIFE_CUTS
+		Phase.WAIT_KNIFE_XCARLET_REACTION, Phase.WAIT_KNIFE_JAMMY_RESPONSE:
+			return Phase.WAIT_KNIFE_XCARLET_REACTION
+		Phase.JAMMY_4_BOTH_SIGNATURE:
+			return Phase.JAMMY_4_BOTH_SIGNATURE
+		Phase.WAIT_SUNSHINE_XCARLET_QUESTION, Phase.WAIT_SUNSHINE_JAMMY_RESPONSE:
+			return Phase.WAIT_SUNSHINE_XCARLET_QUESTION
+		Phase.WAIT_AFTER_LEVEL3_XCARLET_INVITE, Phase.WAIT_AFTER_LEVEL3_JAMMY_ACCEPT, Phase.WAIT_AFTER_LEVEL3_XCARLET_GOODBYE, Phase.WAIT_AFTER_LEVEL3_BLACK_SCREEN:
+			return Phase.WAIT_AFTER_LEVEL3_XCARLET_INVITE
+		Phase.WAIT_DELAYED_DIALOGUES:
+			var ret_val: int = int(extra_data.get("delayed_return_phase", Phase.JAMMY_1_CHAIN))
+			match ret_val:
+				Phase.JAMMY_2_WOUND_DROPS_PUDDLE:
+					return Phase.JAMMY_2_WOUND_DROPS_PUDDLE
+				Phase.JAMMY_3_KNIFE_CUTS:
+					return Phase.JAMMY_3_KNIFE_CUTS
+				Phase.JAMMY_4_BOTH_SIGNATURE:
+					return Phase.JAMMY_4_BOTH_SIGNATURE
+				_:
+					return Phase.JAMMY_1_CHAIN
+		_:
+			return Phase.AUTO_XCARLET_1
+
+
+func _guardar_estado_level3(phase_to_save: Phase = current_phase, stroke_to_save: int = current_stroke_idx) -> void:
+	var save_mgr: Node = get_node_or_null("/root/SaveManager")
+	if save_mgr == null or not save_mgr.has_method("guardar_progreso"):
+		return
+
+	var scene_file: String = scene_file_path
+	if scene_file.is_empty():
+		var current_scene: Node = get_tree().current_scene
+		if current_scene != null:
+			scene_file = current_scene.scene_file_path
+	if scene_file.is_empty():
+		return
+
+	var etiqueta: String = "Level 3 (Phase %d)" % [int(phase_to_save) + 1]
+	var extra_info: Dictionary = {
+		"phase": int(phase_to_save),
+		"current_phase": int(phase_to_save),
+		"step": int(phase_to_save),
+		"stroke_idx": stroke_to_save,
+		"delayed_return_phase": int(delayed_return_phase)
+	}
+	var slot_id: int = _obtener_slot_activo()
+
+	var accepts_slot: bool = false
+	for m in save_mgr.get_method_list():
+		if str(m.get("name", "")) == "guardar_progreso":
+			var args: Array = m.get("args", [])
+			if args.size() >= 4:
+				accepts_slot = true
+			break
+
+	if accepts_slot:
+		save_mgr.call("guardar_progreso", scene_file, etiqueta, extra_info, slot_id)
+	else:
+		save_mgr.call("guardar_progreso", scene_file, etiqueta, extra_info)
 
 
 func _scan_characters_directory() -> void:
@@ -301,6 +437,255 @@ func _load_hand_texture_sharp(candidate_names: Array) -> Texture2D:
 	return ImageTexture.create_from_image(img)
 
 
+func _make_minimal_pill_style(
+	border_col: Color = Color(GOLD_ACCENT.r, GOLD_ACCENT.g, GOLD_ACCENT.b, 0.72),
+	bg_col: Color = Color(0.08, 0.09, 0.12, 0.94),
+	pad_x: float = 28.0,
+	pad_y: float = 12.0,
+	radius: int = 16
+) -> StyleBoxFlat:
+	var sb: StyleBoxFlat = StyleBoxFlat.new()
+	sb.bg_color = bg_col
+	sb.set_corner_radius_all(radius)
+	sb.border_width_left = 3
+	sb.border_width_top = 3
+	sb.border_width_right = 3
+	sb.border_width_bottom = 3
+	sb.border_color = border_col
+	sb.content_margin_left = pad_x
+	sb.content_margin_right = pad_x
+	sb.content_margin_top = pad_y
+	sb.content_margin_bottom = pad_y
+	sb.shadow_color = Color(0.0, 0.0, 0.0, 0.50)
+	sb.shadow_size = 6
+	return sb
+
+
+func _build_minimal_reminders() -> void:
+	# 1. Controles del juego: esquina superior izquierda (sin repetir ENTER)
+	hud_controls_panel = PanelContainer.new()
+	hud_controls_panel.position = Vector2(72.0, 42.0)
+	hud_controls_panel.z_index = 95
+	hud_controls_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_controls_panel.add_theme_stylebox_override(
+		"panel",
+		_make_minimal_pill_style(Color(GOLD_ACCENT.r, GOLD_ACCENT.g, GOLD_ACCENT.b, 0.78), Color(0.08, 0.09, 0.12, 0.94), 30.0, 12.0, 16)
+	)
+	ui_root.add_child(hud_controls_panel)
+
+	hud_controls_label = Label.new()
+	hud_controls_label.text = "Mouse: Move Hand   ·   M: Draw"
+	hud_controls_label.add_theme_font_size_override("font_size", 34)
+	if fredoka_font:
+		hud_controls_label.add_theme_font_override("font", fredoka_font)
+	hud_controls_label.add_theme_color_override("font_color", ACCENT_COLOR)
+	hud_controls_label.add_theme_constant_override("outline_size", 4)
+	hud_controls_label.add_theme_color_override("font_outline_color", Color("#08080a"))
+	hud_controls_panel.add_child(hud_controls_label)
+
+	# 2. Menú: esquina superior derecha
+	hud_menu_panel = PanelContainer.new()
+	hud_menu_panel.anchor_left = 1.0
+	hud_menu_panel.anchor_right = 1.0
+	hud_menu_panel.anchor_top = 0.0
+	hud_menu_panel.anchor_bottom = 0.0
+	hud_menu_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	hud_menu_panel.grow_vertical = Control.GROW_DIRECTION_END
+	hud_menu_panel.offset_top = 42.0
+	hud_menu_panel.offset_right = -72.0
+	hud_menu_panel.z_index = 95
+	hud_menu_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_menu_panel.add_theme_stylebox_override(
+		"panel",
+		_make_minimal_pill_style(Color(ACCENT_COLOR.r, ACCENT_COLOR.g, ACCENT_COLOR.b, 0.62), Color(0.08, 0.09, 0.12, 0.94), 30.0, 12.0, 16)
+	)
+	ui_root.add_child(hud_menu_panel)
+
+	hud_menu_label = Label.new()
+	hud_menu_label.text = "ESC   →   Start Menu"
+	hud_menu_label.add_theme_font_size_override("font_size", 34)
+	if fredoka_font:
+		hud_menu_label.add_theme_font_override("font", fredoka_font)
+	hud_menu_label.add_theme_color_override("font_color", GOLD_ACCENT)
+	hud_menu_label.add_theme_constant_override("outline_size", 4)
+	hud_menu_label.add_theme_color_override("font_outline_color", Color("#08080a"))
+	hud_menu_panel.add_child(hud_menu_label)
+
+	# 3. Recordatorio inferior de Enter: tamaño homogenizado con el resto de píldoras
+	hud_enter_panel = PanelContainer.new()
+	hud_enter_panel.anchor_left = 0.5
+	hud_enter_panel.anchor_right = 0.5
+	hud_enter_panel.anchor_top = 1.0
+	hud_enter_panel.anchor_bottom = 1.0
+	hud_enter_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	hud_enter_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	hud_enter_panel.z_index = 95
+	hud_enter_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	hud_enter_panel.add_theme_stylebox_override(
+		"panel",
+		_make_minimal_pill_style(Color(GOLD_ACCENT.r, GOLD_ACCENT.g, GOLD_ACCENT.b, 0.80), Color(0.08, 0.09, 0.12, 0.94), 24.0, 10.0, 14)
+	)
+	hud_enter_panel.visible = false
+	ui_root.add_child(hud_enter_panel)
+
+	hud_enter_label = Label.new()
+	hud_enter_label.text = "ENTER TO CONTINUE"
+	hud_enter_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hud_enter_label.add_theme_font_size_override("font_size", 30)
+	if fredoka_font:
+		hud_enter_label.add_theme_font_override("font", fredoka_font)
+	hud_enter_label.add_theme_color_override("font_color", ACCENT_COLOR)
+	hud_enter_label.add_theme_constant_override("outline_size", 3)
+	hud_enter_label.add_theme_color_override("font_outline_color", Color("#08080a"))
+	hud_enter_panel.add_child(hud_enter_label)
+
+
+func _set_enter_reminder_visible(show: bool, text: String = "ENTER TO CONTINUE") -> void:
+	if hud_enter_panel == null or hud_enter_label == null:
+		return
+	hud_enter_label.text = text
+	hud_enter_panel.visible = show
+	if show:
+		hud_enter_panel.reset_size()
+		await get_tree().process_frame
+		if is_instance_valid(hud_enter_panel) and hud_enter_panel.visible:
+			var w: float = hud_enter_panel.size.x
+			var h: float = hud_enter_panel.size.y
+			hud_enter_panel.offset_left = -w * 0.5
+			hud_enter_panel.offset_right = w * 0.5
+			hud_enter_panel.offset_top = -h - 24.0
+			hud_enter_panel.offset_bottom = -24.0
+			hud_enter_panel.move_to_front()
+
+
+func _build_leave_confirm_ui() -> void:
+	leave_confirm_overlay = ColorRect.new()
+	leave_confirm_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	leave_confirm_overlay.color = Color(0.0, 0.0, 0.0, 0.72)
+	leave_confirm_overlay.z_index = 120
+	leave_confirm_overlay.visible = false
+	leave_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui_root.add_child(leave_confirm_overlay)
+
+	var center_box: CenterContainer = CenterContainer.new()
+	center_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	leave_confirm_overlay.add_child(center_box)
+
+	leave_confirm_panel = PanelContainer.new()
+	leave_confirm_panel.custom_minimum_size = Vector2(1180.0, 440.0)
+	leave_confirm_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var modal_sb: StyleBoxFlat = StyleBoxFlat.new()
+	modal_sb.bg_color = Color(0.11, 0.12, 0.16, 0.98)
+	modal_sb.set_corner_radius_all(24)
+	modal_sb.border_width_left = 4
+	modal_sb.border_width_top = 4
+	modal_sb.border_width_right = 4
+	modal_sb.border_width_bottom = 4
+	modal_sb.border_color = Color(GOLD_ACCENT.r, GOLD_ACCENT.g, GOLD_ACCENT.b, 0.88)
+	modal_sb.content_margin_left = 56.0
+	modal_sb.content_margin_right = 56.0
+	modal_sb.content_margin_top = 48.0
+	modal_sb.content_margin_bottom = 48.0
+	leave_confirm_panel.add_theme_stylebox_override("panel", modal_sb)
+	center_box.add_child(leave_confirm_panel)
+
+	var vb: VBoxContainer = VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 42)
+	leave_confirm_panel.add_child(vb)
+
+	var q_lbl: Label = Label.new()
+	q_lbl.text = "do you really want to leave ?"
+	q_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	q_lbl.add_theme_font_size_override("font_size", 54)
+	if fredoka_font:
+		q_lbl.add_theme_font_override("font", fredoka_font)
+	q_lbl.add_theme_color_override("font_color", ACCENT_COLOR)
+	q_lbl.add_theme_constant_override("outline_size", 4)
+	q_lbl.add_theme_color_override("font_outline_color", Color("#08080a"))
+	vb.add_child(q_lbl)
+
+	var btn_row: HBoxContainer = HBoxContainer.new()
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_row.add_theme_constant_override("separation", 48)
+	vb.add_child(btn_row)
+
+	leave_yes_btn = Button.new()
+	leave_yes_btn.text = "Yes  [SPACE]"
+	leave_yes_btn.custom_minimum_size = Vector2(360.0, 96.0)
+	leave_yes_btn.add_theme_font_size_override("font_size", 40)
+	if fredoka_font:
+		leave_yes_btn.add_theme_font_override("font", fredoka_font)
+	var yes_sb: StyleBoxFlat = StyleBoxFlat.new()
+	yes_sb.bg_color = Color(0.24, 0.14, 0.16, 0.96)
+	yes_sb.set_corner_radius_all(16)
+	yes_sb.border_width_left = 3
+	yes_sb.border_width_top = 3
+	yes_sb.border_width_right = 3
+	yes_sb.border_width_bottom = 3
+	yes_sb.border_color = MIND_COLOR
+	leave_yes_btn.add_theme_stylebox_override("normal", yes_sb)
+	leave_yes_btn.add_theme_stylebox_override("hover", yes_sb)
+	leave_yes_btn.add_theme_color_override("font_color", ACCENT_COLOR)
+	leave_yes_btn.pressed.connect(_go_to_start_menu)
+	btn_row.add_child(leave_yes_btn)
+
+	leave_no_btn = Button.new()
+	leave_no_btn.text = "No  [ESC]"
+	leave_no_btn.custom_minimum_size = Vector2(360.0, 96.0)
+	leave_no_btn.add_theme_font_size_override("font_size", 40)
+	if fredoka_font:
+		leave_no_btn.add_theme_font_override("font", fredoka_font)
+	var no_sb: StyleBoxFlat = StyleBoxFlat.new()
+	no_sb.bg_color = Color(0.16, 0.18, 0.23, 0.96)
+	no_sb.set_corner_radius_all(16)
+	no_sb.border_width_left = 3
+	no_sb.border_width_top = 3
+	no_sb.border_width_right = 3
+	no_sb.border_width_bottom = 3
+	no_sb.border_color = Color(1.0, 1.0, 1.0, 0.45)
+	leave_no_btn.add_theme_stylebox_override("normal", no_sb)
+	leave_no_btn.add_theme_stylebox_override("hover", no_sb)
+	leave_no_btn.add_theme_color_override("font_color", ACCENT_COLOR)
+	leave_no_btn.pressed.connect(_close_leave_confirm)
+	btn_row.add_child(leave_no_btn)
+
+
+func _open_leave_confirm() -> void:
+	if leave_dialog_open:
+		return
+	leave_dialog_open = true
+	is_player_tracing = false
+	has_last_sample_pos = false
+	_stop_pencil_sound()
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+	leave_confirm_overlay.visible = true
+	leave_confirm_overlay.move_to_front()
+
+
+func _close_leave_confirm() -> void:
+	leave_dialog_open = false
+	leave_confirm_overlay.visible = false
+	Input.set_mouse_mode(Input.MOUSE_MODE_HIDDEN)
+
+
+func _go_to_start_menu() -> void:
+	_guardar_estado_level3(current_phase, current_stroke_idx)
+	leave_dialog_open = false
+	_stop_pencil_sound()
+	Input.set_mouse_mode(Input.MOUSE_MODE_VISIBLE)
+
+	var save_mgr: Node = get_node_or_null("/root/SaveManager")
+	if save_mgr != null and save_mgr.has_method("volver_al_inicio"):
+		save_mgr.volver_al_inicio()
+		return
+
+	if ResourceLoader.exists("res://main.tscn"):
+		get_tree().call_deferred("change_scene_to_file", "res://main.tscn")
+	elif ResourceLoader.exists("res://Main.tscn"):
+		get_tree().call_deferred("change_scene_to_file", "res://Main.tscn")
+
+
 func _build_ui() -> void:
 	ui_root = Control.new()
 	ui_root.position = Vector2.ZERO
@@ -406,6 +791,7 @@ void fragment() {
 	black_screen_rect.visible = false
 	ui_root.add_child(black_screen_rect)
 
+	_build_minimal_reminders()
 	_build_kawaii_accuracy_bar()
 	_build_thought_dots_badge()
 	_build_parallel_mind_box()
@@ -420,7 +806,7 @@ void fragment() {
 
 func _build_kawaii_accuracy_bar() -> void:
 	kawaii_panel = Panel.new()
-	kawaii_panel.position = Vector2(3038.0, 56.0)
+	kawaii_panel.position = Vector2(3038.0, 148.0)
 	kawaii_panel.size = Vector2(730.0, 150.0)
 	kawaii_panel.z_index = 14
 	kawaii_panel.visible = false
@@ -481,10 +867,7 @@ func _build_kawaii_accuracy_bar() -> void:
 
 
 func _sync_kawaii_panel_position() -> void:
-	if instruction_panel != null and instruction_panel.visible and is_instruction_in_top_right:
-		kawaii_panel.position = Vector2(3038.0, TOP_RIGHT_INSTRUCTION_POS.y + TOP_RIGHT_INSTRUCTION_SIZE.y + 20.0)
-	else:
-		kawaii_panel.position = Vector2(3038.0, 56.0)
+	kawaii_panel.position = Vector2(3038.0, 148.0)
 
 
 func _build_thought_dots_badge() -> void:
@@ -715,17 +1098,12 @@ func _build_homogenized_boxes() -> void:
 func _show_white_instruction(bbcode_text: String, fixed_top_right: bool = false) -> void:
 	is_instruction_in_top_right = fixed_top_right
 	if fixed_top_right:
-		instruction_panel.position = TOP_RIGHT_INSTRUCTION_POS
-		instruction_panel.size = TOP_RIGHT_INSTRUCTION_SIZE
-		instruction_label.position = Vector2(32.0, 16.0)
-		instruction_label.size = Vector2(TOP_RIGHT_INSTRUCTION_SIZE.x - 64.0, TOP_RIGHT_INSTRUCTION_SIZE.y - 32.0)
-		instruction_label.add_theme_font_size_override("normal_font_size", 42)
-	else:
-		instruction_panel.position = Vector2(1100.0, 860.0)
-		instruction_panel.size = Vector2(1640.0, 320.0)
-		instruction_label.position = Vector2(44.0, 24.0)
-		instruction_label.size = Vector2(1552.0, 272.0)
-		instruction_label.add_theme_font_size_override("normal_font_size", 48)
+		return
+	instruction_panel.position = Vector2(1100.0, 860.0)
+	instruction_panel.size = Vector2(1640.0, 320.0)
+	instruction_label.position = Vector2(44.0, 24.0)
+	instruction_label.size = Vector2(1552.0, 272.0)
+	instruction_label.add_theme_font_size_override("normal_font_size", 48)
 
 	instruction_label.text = bbcode_text
 	instruction_panel.visible = true
@@ -745,16 +1123,17 @@ func _hide_dialogue() -> void:
 		dialogue_panel.visible = false
 	if speaker_panel != null:
 		speaker_panel.visible = false
+	_set_enter_reminder_visible(false)
 	_hide_white_instruction()
 
 
 func _update_dialogue_prompt(is_blocking_wait: bool) -> void:
 	if _has_more_dialogues() or _has_more_parallel_mind():
-		_show_white_instruction("[center]Press [lb]ENTER[rb] to move to the next dialogue.[/center]", true)
+		_set_enter_reminder_visible(true, "ENTER TO CONTINUE")
 	elif is_blocking_wait:
-		_show_white_instruction("[center]Press [lb]ENTER[rb] to continue.[/center]", true)
+		_set_enter_reminder_visible(true, "ENTER TO CONTINUE")
 	else:
-		_hide_white_instruction()
+		_set_enter_reminder_visible(false)
 
 
 # ==============================================================================
@@ -1163,6 +1542,7 @@ func _build_smooth_cat_signature_strokes(cat_rect: Rect2, min_allowed_x: float) 
 # ==============================================================================
 func _start_phase(phase: Phase) -> void:
 	current_phase = phase
+	_guardar_estado_level3(current_phase, current_stroke_idx)
 	active_guide_points = PackedVector2Array()
 	guide_covered.clear()
 	current_anchor_idx = -1
@@ -1200,6 +1580,7 @@ func _start_phase(phase: Phase) -> void:
 				true
 			)
 			current_phase = Phase.WAIT_AFTER_XCARLET_1
+			_guardar_estado_level3(current_phase, 0)
 
 		Phase.SHOW_INSTRUCTIONS:
 			_set_exclusive_hand("none")
@@ -1209,7 +1590,7 @@ func _start_phase(phase: Phase) -> void:
 			_clear_mask(0.0)
 
 			_show_white_instruction(
-				"[center]Draw the stroke with " + str(int(MIN_ACCURACY)) + "% or more accuracy on the indicated parts by using the mouse to move the hand and the [lb]M[rb] key to draw.[/center]\n[center]Press [lb]ENTER[rb] to begin.[/center]",
+				"[center]Draw the stroke with " + str(int(MIN_ACCURACY)) + "% or more accuracy on the indicated parts by using the mouse to move the hand and the M key to draw.[/center]\n[center]Press ENTER to begin.[/center]",
 				false
 			)
 
@@ -1243,10 +1624,11 @@ func _start_phase(phase: Phase) -> void:
 
 			_update_dialogue_prompt(true)
 			current_phase = Phase.WAIT_AFTER_XCARLET_2
+			_guardar_estado_level3(current_phase, 0)
 
 		Phase.JAMMY_2_WOUND_DROPS_PUDDLE:
 			_hide_dialogue()
-			base_art_rect.texture = tex_xcarlet_2
+			base_art_rect.texture = tex_jammy_2
 			reveal_art_rect.texture = tex_jammy_2
 			_clear_mask(0.0)
 
@@ -1313,6 +1695,7 @@ func _start_phase(phase: Phase) -> void:
 
 			_update_dialogue_prompt(true)
 			current_phase = Phase.WAIT_AFTER_XCARLET_3
+			_guardar_estado_level3(current_phase, 0)
 
 		Phase.JAMMY_3_KNIFE_CUTS:
 			_hide_dialogue()
@@ -1418,6 +1801,7 @@ func _start_phase(phase: Phase) -> void:
 # ==============================================================================
 func _begin_jammy_interactive_queue() -> void:
 	current_stroke_idx = 0
+	_guardar_estado_level3(current_phase, current_stroke_idx)
 	_set_exclusive_hand("jammy")
 	_place_hand_at_screen_tip(jammy_hand_rect, JAMMY_TIP_UV, get_global_mouse_position(), false)
 	_load_current_jammy_stroke()
@@ -1428,6 +1812,7 @@ func _load_current_jammy_stroke() -> void:
 		_on_all_jammy_strokes_completed()
 		return
 
+	_guardar_estado_level3(current_phase, current_stroke_idx)
 	mask_snapshot = mask_image.get_data().duplicate()
 
 	var raw_pts: PackedVector2Array = jammy_strokes_queue[current_stroke_idx]["pts"]
@@ -1461,6 +1846,9 @@ func _process(delta: float) -> void:
 
 	if not active_guide_points.is_empty():
 		guide_canvas.queue_redraw()
+
+	if leave_dialog_open:
+		return
 
 	if jammy_hand_rect.visible and not xcarlet_hand_rect.visible and _is_interactive_jammy_phase():
 		var m_screen: Vector2 = get_global_mouse_position()
@@ -1507,7 +1895,23 @@ func _is_blocking_wait_phase() -> bool:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
-		if event.keycode == KEY_ENTER or event.keycode == KEY_SPACE:
+		if event.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			if leave_dialog_open:
+				_close_leave_confirm()
+			else:
+				_open_leave_confirm()
+			return
+		if leave_dialog_open and (event.keycode == KEY_SPACE or event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
+			get_viewport().set_input_as_handled()
+			_go_to_start_menu()
+			return
+
+	if leave_dialog_open:
+		return
+
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER or event.keycode == KEY_SPACE:
 			var advanced_any: bool = false
 			if _has_more_dialogues():
 				dialogue_queue_idx += 1
@@ -1523,15 +1927,20 @@ func _unhandled_input(event: InputEvent) -> void:
 
 			match current_phase:
 				Phase.WAIT_DELAYED_DIALOGUES:
+					_set_enter_reminder_visible(false)
 					_hide_white_instruction()
 					_execute_post_jammy_phase(delayed_return_phase)
 				Phase.WAIT_AFTER_XCARLET_1:
+					_set_enter_reminder_visible(false)
 					_start_phase(Phase.SHOW_INSTRUCTIONS)
 				Phase.SHOW_INSTRUCTIONS:
+					_set_enter_reminder_visible(false)
 					_start_phase(Phase.JAMMY_1_CHAIN)
 				Phase.WAIT_AFTER_XCARLET_2:
+					_set_enter_reminder_visible(false)
 					_start_phase(Phase.JAMMY_2_WOUND_DROPS_PUDDLE)
 				Phase.WAIT_AFTER_XCARLET_3:
+					_set_enter_reminder_visible(false)
 					_start_phase(Phase.JAMMY_3_KNIFE_CUTS)
 				Phase.WAIT_KNIFE_XCARLET_REACTION:
 					_start_dialogue(
@@ -1542,7 +1951,9 @@ func _unhandled_input(event: InputEvent) -> void:
 						true
 					)
 					current_phase = Phase.WAIT_KNIFE_JAMMY_RESPONSE
+					_guardar_estado_level3(current_phase, 0)
 				Phase.WAIT_KNIFE_JAMMY_RESPONSE:
+					_set_enter_reminder_visible(false)
 					_start_phase(Phase.JAMMY_4_BOTH_SIGNATURE)
 				Phase.WAIT_SUNSHINE_XCARLET_QUESTION:
 					_start_dialogue(
@@ -1553,6 +1964,7 @@ func _unhandled_input(event: InputEvent) -> void:
 						true
 					)
 					current_phase = Phase.WAIT_SUNSHINE_JAMMY_RESPONSE
+					_guardar_estado_level3(current_phase, 0)
 				Phase.WAIT_SUNSHINE_JAMMY_RESPONSE:
 					_hide_parallel_mind()
 					_start_dialogue(
@@ -1563,6 +1975,7 @@ func _unhandled_input(event: InputEvent) -> void:
 						true
 					)
 					current_phase = Phase.WAIT_AFTER_LEVEL3_XCARLET_INVITE
+					_guardar_estado_level3(current_phase, 0)
 				Phase.WAIT_AFTER_LEVEL3_XCARLET_INVITE:
 					_start_dialogue(
 						"Jammy",
@@ -1575,6 +1988,7 @@ func _unhandled_input(event: InputEvent) -> void:
 						"*It'll end badly. It'll end badly. You, trying to have a deep relationship? You're plastic—just a mentally sick person trying not to lose control in front of everyone. Can you hear your heart beating that fast? Huh? Piece of shit.*"
 					)
 					current_phase = Phase.WAIT_AFTER_LEVEL3_JAMMY_ACCEPT
+					_guardar_estado_level3(current_phase, 0)
 					_update_dialogue_prompt(true)
 				Phase.WAIT_AFTER_LEVEL3_JAMMY_ACCEPT:
 					_hide_parallel_mind()
@@ -1586,6 +2000,7 @@ func _unhandled_input(event: InputEvent) -> void:
 						true
 					)
 					current_phase = Phase.WAIT_AFTER_LEVEL3_XCARLET_GOODBYE
+					_guardar_estado_level3(current_phase, 0)
 				Phase.WAIT_AFTER_LEVEL3_XCARLET_GOODBYE:
 					_set_exclusive_hand("none")
 					if black_screen_rect != null:
@@ -1601,11 +2016,14 @@ func _unhandled_input(event: InputEvent) -> void:
 						"*You'll feel so bad tomorrow, as usual. You'll keep trying to feel better, and relief won't arrive until you go to bed, wishing you could repeat the whole experience again. Because of OCD, you'll never get a girlfriend, 'cause nobody wants to fall in love with an annoying person like you. Sad, but it's your reality.*"
 					)
 					current_phase = Phase.WAIT_AFTER_LEVEL3_BLACK_SCREEN
+					_guardar_estado_level3(current_phase, 0)
 					_update_dialogue_prompt(true)
 				Phase.WAIT_AFTER_LEVEL3_BLACK_SCREEN:
 					_hide_parallel_mind()
+					_set_enter_reminder_visible(false)
 					_start_phase(Phase.FINISHED)
 				Phase.FINISHED:
+					_set_enter_reminder_visible(false)
 					_finish_scene()
 
 
@@ -1777,6 +2195,7 @@ func _complete_current_stroke() -> void:
 		)
 
 	current_stroke_idx += 1
+	_guardar_estado_level3(current_phase, current_stroke_idx)
 	_load_current_jammy_stroke()
 
 
@@ -1801,6 +2220,7 @@ func _on_all_jammy_strokes_completed() -> void:
 	if _has_more_dialogues():
 		delayed_return_phase = completed_phase
 		current_phase = Phase.WAIT_DELAYED_DIALOGUES
+		_guardar_estado_level3(current_phase, 0)
 		dialogue_queue_idx += 1
 		_render_dialogue_entry(dialogue_queue[dialogue_queue_idx])
 		_update_dialogue_prompt(true)
@@ -1832,6 +2252,7 @@ func _execute_post_jammy_phase(completed_phase: Phase) -> void:
 			await _retract_hand_down(jammy_hand_rect)
 
 			current_phase = Phase.WAIT_KNIFE_XCARLET_REACTION
+			_guardar_estado_level3(current_phase, 0)
 			_start_dialogue("Xcarlet", "Oh, you're mad, sis—another wound? Why?", XCARLET_COLOR, false, true)
 
 		Phase.JAMMY_4_BOTH_SIGNATURE:
@@ -1841,6 +2262,7 @@ func _execute_post_jammy_phase(completed_phase: Phase) -> void:
 			await _retract_hand_down(jammy_hand_rect)
 
 			current_phase = Phase.WAIT_SUNSHINE_XCARLET_QUESTION
+			_guardar_estado_level3(current_phase, 0)
 			_start_dialogue("Xcarlet", "And why sunshine?", XCARLET_COLOR, false, true)
 
 
@@ -2429,6 +2851,7 @@ func _make_speaker_style(bg_color: Color, accent_color: Color) -> StyleBoxFlat:
 
 func _finish_scene() -> void:
 	_hide_parallel_mind()
+	_set_enter_reminder_visible(false)
 	var target_scene: String = next_scene_path
 	if not ResourceLoader.exists(target_scene) and ResourceLoader.exists("res://fairScenes.tscn"):
 		target_scene = "res://fairScenes.tscn"

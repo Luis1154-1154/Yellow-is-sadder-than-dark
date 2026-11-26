@@ -24,6 +24,7 @@ const SPEAKER_BG_COLOR := Color(0.14, 0.15, 0.17, 0.94)
 const JAMMY_COLOR := Color("#f5d08a")
 const XCARLET_COLOR := Color("#5bc0eb")
 const LOUIS_COLOR := Color("#ff6b6f")
+const GOLD_ACCENT := Color("#f5d08a")
 
 # Tarjeta de instrucciones tipo pergamino con trazo de tinta
 const CARD_BG_COLOR := Color("#fbf5e8")
@@ -88,6 +89,19 @@ var xcarlet_score_label: Label
 var round_panel: Panel
 var round_label: Label
 var timer_label: Label
+
+# Indicador de menú arriba a la derecha con alto contraste
+var menu_hint_panel: PanelContainer
+var menu_hint_label: Label
+
+# Modal de confirmación al pulsar ESC
+var leave_confirm_layer: CanvasLayer
+var leave_confirm_overlay: ColorRect
+var leave_confirm_panel: PanelContainer
+var leave_yes_btn: Button
+var leave_no_btn: Button
+var leave_dialog_open := false
+var mouse_mode_before_leave_dialog := Input.MOUSE_MODE_VISIBLE
 
 # Cuadro de diálogo de Louis y barra minimalista inferior persistente
 var dialogue_panel: Panel
@@ -155,6 +169,7 @@ func _ready() -> void:
 	_detect_gun_sight_uv()
 	_build_audio()
 	_build_ui()
+	_build_leave_confirm_ui()
 	_spawn_gallery_targets()
 	_start_intro_dialogue()
 
@@ -738,6 +753,35 @@ func _build_ui() -> void:
 	xcarlet_score_label.add_theme_color_override("font_color", XCARLET_COLOR)
 	xcarlet_score_panel.add_child(xcarlet_score_label)
 
+	# --- INDICADOR DE MENÚ ARRIBA A LA DERECHA CON ALTO CONTRASTE ---
+	menu_hint_panel = PanelContainer.new()
+	menu_hint_panel.anchor_left = 1.0
+	menu_hint_panel.anchor_right = 1.0
+	menu_hint_panel.anchor_top = 0.0
+	menu_hint_panel.anchor_bottom = 0.0
+	menu_hint_panel.grow_horizontal = Control.GROW_DIRECTION_BEGIN
+	menu_hint_panel.grow_vertical = Control.GROW_DIRECTION_END
+	menu_hint_panel.offset_top = 204.0
+	menu_hint_panel.offset_right = -72.0
+	menu_hint_panel.z_index = 28
+	menu_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	menu_hint_panel.add_theme_stylebox_override("panel", _make_menu_pill_style())
+	ui_root.add_child(menu_hint_panel)
+
+	menu_hint_label = Label.new()
+	menu_hint_label.text = "ESC   →   Start Menu"
+	menu_hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	menu_hint_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	menu_hint_label.add_theme_font_size_override("font_size", 32)
+	menu_hint_label.add_theme_font_override("font", font_bold)
+	menu_hint_label.add_theme_color_override("font_color", GOLD_ACCENT)
+	menu_hint_label.add_theme_constant_override("outline_size", 5)
+	menu_hint_label.add_theme_color_override("font_outline_color", Color("#050507"))
+	menu_hint_label.add_theme_color_override("font_shadow_color", Color("#000000f5"))
+	menu_hint_label.add_theme_constant_override("shadow_offset_x", 3)
+	menu_hint_label.add_theme_constant_override("shadow_offset_y", 3)
+	menu_hint_panel.add_child(menu_hint_label)
+
 	# --- INDICADOR DE RONDA Y TIEMPO (ARRIBA AL CENTRO) ---
 	round_panel = Panel.new()
 	round_panel.position = Vector2((BASE_SIZE.x - 1040.0) * 0.5, 44.0)
@@ -814,7 +858,7 @@ func _build_ui() -> void:
 	dialogue_label.add_theme_constant_override("shadow_offset_y", 3)
 	dialogue_panel.add_child(dialogue_label)
 
-	# --- BARRA MINIMALISTA INFERIOR DE CONTROLES (PERSISTENTE DURANTE EL JUEGO) ---
+	# --- BARRA MINIMALISTA INFERIOR DE CONTROLES (HOMOGENEIZADA) ---
 	continue_panel = PanelContainer.new()
 	continue_panel.anchor_left = 0.5
 	continue_panel.anchor_right = 0.5
@@ -829,11 +873,11 @@ func _build_ui() -> void:
 	continue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	continue_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	continue_label.add_theme_font_size_override("font_size", 32)
-	continue_label.add_theme_font_override("font", font_bold)
+	continue_label.add_theme_font_override("font", font_regular)
 	continue_label.add_theme_color_override("font_color", TEXT_COLOR)
 	continue_label.add_theme_constant_override("outline_size", 5)
 	continue_label.add_theme_color_override("font_outline_color", Color("#08080a"))
-	continue_label.text = "ENTER TO CONTINUE"
+	continue_label.text = "ENTER / SPACE"
 	continue_panel.add_child(continue_label)
 
 	# --- TARJETA DE INSTRUCCIONES CON TECLAS TÁCTILES E INSIGNIAS ---
@@ -956,6 +1000,161 @@ func _build_ui() -> void:
 	_update_hud()
 
 
+func _make_menu_pill_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.07, 0.08, 0.11, 0.96)
+	style.set_corner_radius_all(14)
+	style.border_width_left = 3
+	style.border_width_top = 3
+	style.border_width_right = 3
+	style.border_width_bottom = 3
+	style.border_color = Color(GOLD_ACCENT.r, GOLD_ACCENT.g, GOLD_ACCENT.b, 0.85)
+	style.content_margin_left = 28.0
+	style.content_margin_right = 28.0
+	style.content_margin_top = 10.0
+	style.content_margin_bottom = 10.0
+	style.shadow_color = Color(0.0, 0.0, 0.0, 0.75)
+	style.shadow_size = 8
+	return style
+
+
+func _build_leave_confirm_ui() -> void:
+	leave_confirm_layer = CanvasLayer.new()
+	leave_confirm_layer.layer = 120
+	leave_confirm_layer.visible = false
+	add_child(leave_confirm_layer)
+
+	leave_confirm_overlay = ColorRect.new()
+	leave_confirm_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	leave_confirm_overlay.color = Color(0.0, 0.0, 0.0, 0.75)
+	leave_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	leave_confirm_layer.add_child(leave_confirm_overlay)
+
+	var center_box := CenterContainer.new()
+	center_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	leave_confirm_overlay.add_child(center_box)
+
+	leave_confirm_panel = PanelContainer.new()
+	leave_confirm_panel.custom_minimum_size = Vector2(1180.0, 440.0)
+	leave_confirm_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var modal_sb := StyleBoxFlat.new()
+	modal_sb.bg_color = Color(0.09, 0.10, 0.14, 0.98)
+	modal_sb.set_corner_radius_all(24)
+	modal_sb.border_width_left = 4
+	modal_sb.border_width_top = 4
+	modal_sb.border_width_right = 4
+	modal_sb.border_width_bottom = 4
+	modal_sb.border_color = Color(GOLD_ACCENT.r, GOLD_ACCENT.g, GOLD_ACCENT.b, 0.90)
+	modal_sb.content_margin_left = 56.0
+	modal_sb.content_margin_right = 56.0
+	modal_sb.content_margin_top = 48.0
+	modal_sb.content_margin_bottom = 48.0
+	leave_confirm_panel.add_theme_stylebox_override("panel", modal_sb)
+	center_box.add_child(leave_confirm_panel)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 42)
+	leave_confirm_panel.add_child(vb)
+
+	var q_lbl := Label.new()
+	q_lbl.text = "do you really want to leave ?"
+	q_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	q_lbl.add_theme_font_size_override("font_size", 54)
+	q_lbl.add_theme_font_override("font", font_bold)
+	q_lbl.add_theme_color_override("font_color", TEXT_COLOR)
+	q_lbl.add_theme_constant_override("outline_size", 4)
+	q_lbl.add_theme_color_override("font_outline_color", Color("#050507"))
+	vb.add_child(q_lbl)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_row.add_theme_constant_override("separation", 48)
+	vb.add_child(btn_row)
+
+	leave_yes_btn = Button.new()
+	leave_yes_btn.text = "Yes  [SPACE]"
+	leave_yes_btn.custom_minimum_size = Vector2(360.0, 96.0)
+	leave_yes_btn.add_theme_font_size_override("font_size", 40)
+	leave_yes_btn.add_theme_font_override("font", font_bold)
+	var yes_sb := StyleBoxFlat.new()
+	yes_sb.bg_color = Color(0.24, 0.12, 0.15, 0.96)
+	yes_sb.set_corner_radius_all(16)
+	yes_sb.border_width_left = 3
+	yes_sb.border_width_top = 3
+	yes_sb.border_width_right = 3
+	yes_sb.border_width_bottom = 3
+	yes_sb.border_color = LOUIS_COLOR
+	leave_yes_btn.add_theme_stylebox_override("normal", yes_sb)
+	leave_yes_btn.add_theme_stylebox_override("hover", yes_sb)
+	leave_yes_btn.add_theme_color_override("font_color", TEXT_COLOR)
+	leave_yes_btn.pressed.connect(_go_to_start_menu)
+	btn_row.add_child(leave_yes_btn)
+
+	leave_no_btn = Button.new()
+	leave_no_btn.text = "No  [ESC]"
+	leave_no_btn.custom_minimum_size = Vector2(360.0, 96.0)
+	leave_no_btn.add_theme_font_size_override("font_size", 40)
+	leave_no_btn.add_theme_font_override("font", font_bold)
+	var no_sb := StyleBoxFlat.new()
+	no_sb.bg_color = Color(0.15, 0.17, 0.22, 0.96)
+	no_sb.set_corner_radius_all(16)
+	no_sb.border_width_left = 3
+	no_sb.border_width_top = 3
+	no_sb.border_width_right = 3
+	no_sb.border_width_bottom = 3
+	no_sb.border_color = Color(1.0, 1.0, 1.0, 0.45)
+	leave_no_btn.add_theme_stylebox_override("normal", no_sb)
+	leave_no_btn.add_theme_stylebox_override("hover", no_sb)
+	leave_no_btn.add_theme_color_override("font_color", TEXT_COLOR)
+	leave_no_btn.pressed.connect(_close_leave_confirm)
+	btn_row.add_child(leave_no_btn)
+
+
+func _open_leave_confirm() -> void:
+	if leave_dialog_open:
+		return
+	leave_dialog_open = true
+	mouse_mode_before_leave_dialog = Input.mouse_mode
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if is_instance_valid(sfx_player):
+		sfx_player.stop()
+	if is_instance_valid(leave_confirm_layer):
+		leave_confirm_layer.visible = true
+
+
+func _close_leave_confirm() -> void:
+	leave_dialog_open = false
+	if is_instance_valid(leave_confirm_layer):
+		leave_confirm_layer.visible = false
+	if state == GameState.PLAYING and is_jammy_turn:
+		Input.mouse_mode = Input.MOUSE_MODE_HIDDEN
+	else:
+		Input.mouse_mode = mouse_mode_before_leave_dialog
+
+
+func _go_to_start_menu() -> void:
+	leave_dialog_open = false
+	ending_triggered = true
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	if is_instance_valid(leave_confirm_layer):
+		leave_confirm_layer.visible = false
+	if is_instance_valid(gun_sfx_player):
+		gun_sfx_player.stop()
+	if is_instance_valid(hit_sfx_player):
+		hit_sfx_player.stop()
+
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	if save_mgr != null and save_mgr.has_method("volver_al_inicio"):
+		save_mgr.volver_al_inicio()
+		return
+
+	if ResourceLoader.exists("res://main.tscn"):
+		get_tree().call_deferred("change_scene_to_file", "res://main.tscn")
+	elif ResourceLoader.exists("res://Main.tscn"):
+		get_tree().call_deferred("change_scene_to_file", "res://Main.tscn")
+
+
 func _calc_proportional_size(tex: Texture2D, target_height: float) -> Vector2:
 	if tex == null or tex.get_height() <= 0:
 		return Vector2(440.0, target_height)
@@ -1033,8 +1232,9 @@ func _start_intro_dialogue() -> void:
 	state_input_lock = 0.15
 	dialogue_panel.visible = true
 	speaker_panel.visible = true
-	continue_label.text = "ENTER TO CONTINUE"
+	continue_label.text = "ENTER / SPACE"
 	continue_panel.visible = true
+	menu_hint_panel.visible = true
 	instruction_box_panel.visible = false
 	center_banner_panel.visible = false
 	arm_sprite.visible = false
@@ -1066,7 +1266,7 @@ func _show_instruction_screen() -> void:
 	state_input_lock = 0.15
 	dialogue_panel.visible = false
 	speaker_panel.visible = false
-	continue_label.text = "ENTER TO BEGIN"
+	continue_label.text = "ENTER / SPACE"
 	continue_panel.visible = true
 	instruction_box_panel.visible = true
 
@@ -1077,7 +1277,7 @@ func _begin_turn_banner() -> void:
 	instruction_box_panel.visible = false
 	dialogue_panel.visible = false
 	speaker_panel.visible = false
-	continue_label.text = "AIM: MOUSE / WASD   •   SHOOT: CLICK / ENTER / SPACE"
+	continue_label.text = "ENTER / SPACE"
 	continue_panel.visible = true
 	arm_sprite.visible = false
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -1115,7 +1315,7 @@ func _start_active_turn() -> void:
 	state = GameState.PLAYING
 	state_input_lock = 0.12
 	center_banner_panel.visible = false
-	continue_label.text = "AIM: MOUSE / WASD   •   SHOOT: CLICK / ENTER / SPACE"
+	continue_label.text = "ENTER / SPACE"
 	continue_panel.visible = true
 	turn_time_left = TURN_DURATION
 	shot_timer = 0.0
@@ -1139,6 +1339,9 @@ func _start_active_turn() -> void:
 
 
 func _process(delta: float) -> void:
+	if leave_dialog_open:
+		return
+
 	if state_input_lock > 0.0:
 		state_input_lock = maxf(0.0, state_input_lock - delta)
 
@@ -1325,6 +1528,22 @@ func _is_enter_pressed(event: InputEvent) -> bool:
 
 func _input(event: InputEvent) -> void:
 	if ending_triggered:
+		return
+
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			if leave_dialog_open:
+				_close_leave_confirm()
+			else:
+				_open_leave_confirm()
+			return
+		if leave_dialog_open and event.keycode in [KEY_ENTER, KEY_KP_ENTER, KEY_SPACE]:
+			get_viewport().set_input_as_handled()
+			_go_to_start_menu()
+			return
+
+	if leave_dialog_open:
 		return
 
 	if event is InputEventMouseMotion and state == GameState.PLAYING and is_jammy_turn:
@@ -1520,7 +1739,7 @@ func _show_final_results() -> void:
 	center_banner_sub.visible = true
 	center_banner_panel.visible = true
 
-	continue_label.text = "ENTER TO CONTINUE"
+	continue_label.text = "ENTER / SPACE"
 	continue_panel.visible = true
 	_update_hud()
 

@@ -1,0 +1,6 @@
+[gd_scene format=3 uid="uid://coyksy73idj2c"]
+
+[ext_resource type="Script" uid="uid://cy0ix7ksiadqq" path="res://rose_park.gd" id="1_b8ebr"]
+
+[node name="Node2D" type="Node2D" unique_id=1031262531]
+script = ExtResource("1_b8ebr")

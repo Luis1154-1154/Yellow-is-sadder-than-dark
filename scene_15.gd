@@ -7,6 +7,7 @@ const MIND_PANEL_COLOR := Color(0.18, 0.18, 0.20, 0.56)
 const SPEAKER_BG_COLOR := Color(0.18, 0.19, 0.21, 0.68)
 const MIND_COLOR := Color("#ff5a5f")
 const ACCENT_COLOR := Color("#fff9f0")
+const GOLD_ACCENT := Color("#f5d08a")
 
 # Colores por personaje
 const JAMMY_COLOR := Color("#f5d08a")
@@ -37,7 +38,17 @@ var dialogue_panel: Panel
 var dialogue_label: Label
 var speaker_panel: Panel
 var speaker_label: Label
+var continue_panel: PanelContainer
 var continue_label: Label
+
+# Recordatorio perpetuo de menú + modal de confirmación
+var perpetual_hint_panel: PanelContainer
+var perpetual_hint_label: Label
+var leave_confirm_overlay: ColorRect
+var leave_confirm_panel: PanelContainer
+var leave_yes_btn: Button
+var leave_no_btn: Button
+var leave_dialog_open: bool = false
 
 var typewriter_player: AudioStreamPlayer
 var mind_breath_player: AudioStreamPlayer
@@ -59,12 +70,110 @@ var ending_triggered := false
 
 func _ready() -> void:
 	name = "scene15"
+	process_mode = Node.PROCESS_MODE_ALWAYS
 	_build_audio()
 	_build_ui()
+	_build_leave_confirm_ui()
 	_build_script()
 	_split_long_dialogues()
+	_aplicar_guardado_cargado()
 	_play_eye_open_fade()
 	_show_entry()
+
+
+func _obtener_slot_activo() -> int:
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	if save_mgr == null:
+		return 1
+	for prop in ["slot_actual", "current_slot", "active_slot", "selected_slot"]:
+		if prop in save_mgr:
+			var val = save_mgr.get(prop)
+			if typeof(val) == TYPE_INT and int(val) > 0:
+				return int(val)
+	return 1
+
+
+func _aplicar_guardado_cargado() -> void:
+	var extra_data: Dictionary = {}
+	if get_tree().has_meta("loaded_save_extra"):
+		var raw_meta = get_tree().get_meta("loaded_save_extra")
+		if raw_meta is Dictionary:
+			extra_data = raw_meta
+		get_tree().remove_meta("loaded_save_extra")
+
+	if extra_data.is_empty():
+		var save_mgr := get_node_or_null("/root/SaveManager")
+		if save_mgr != null and "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
+			extra_data = save_mgr.extra_data
+
+	var saved_idx: int = -1
+	if extra_data.has("entry_index"):
+		saved_idx = int(extra_data["entry_index"])
+	elif extra_data.has("step"):
+		saved_idx = int(extra_data["step"])
+
+	if saved_idx >= 0 and entries.size() > 0:
+		entry_index = clampi(saved_idx, 0, entries.size() - 1)
+
+
+func _guardar_estado_actual() -> void:
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	if save_mgr == null or not save_mgr.has_method("guardar_progreso"):
+		return
+
+	var scene_file: String = scene_file_path
+	if scene_file.is_empty():
+		var current_scene := get_tree().current_scene
+		if current_scene != null:
+			scene_file = current_scene.scene_file_path
+	if scene_file.is_empty():
+		return
+
+	var etiqueta: String = "Scene 15 (%d/%d)" % [entry_index + 1, max(entries.size(), 1)]
+	var extra_info: Dictionary = {
+		"entry_index": entry_index,
+		"step": entry_index
+	}
+	var slot_id: int = _obtener_slot_activo()
+
+	var accepts_slot: bool = false
+	for m in save_mgr.get_method_list():
+		if str(m.get("name", "")) == "guardar_progreso":
+			var args: Array = m.get("args", [])
+			if args.size() >= 4:
+				accepts_slot = true
+			break
+
+	if accepts_slot:
+		save_mgr.call("guardar_progreso", scene_file, etiqueta, extra_info, slot_id)
+	else:
+		save_mgr.call("guardar_progreso", scene_file, etiqueta, extra_info)
+
+
+func _set_continue_visible(visible_state: bool, hint_text: String = "ENTER TO CONTINUE") -> void:
+	if continue_panel == null or continue_label == null:
+		return
+	continue_label.text = hint_text
+	continue_panel.visible = visible_state
+	continue_label.visible = visible_state
+	if visible_state:
+		continue_panel.anchor_left = 0.5
+		continue_panel.anchor_right = 0.5
+		continue_panel.anchor_top = 1.0
+		continue_panel.anchor_bottom = 1.0
+		continue_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+		continue_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+		continue_panel.reset_size()
+		await get_tree().process_frame
+		if not is_instance_valid(continue_panel) or not continue_panel.visible:
+			return
+		var panel_w: float = continue_panel.size.x
+		var panel_h: float = continue_panel.size.y
+		continue_panel.offset_left = -panel_w * 0.5
+		continue_panel.offset_right = panel_w * 0.5
+		continue_panel.offset_top = -panel_h - 45.0
+		continue_panel.offset_bottom = -45.0
+		continue_panel.move_to_front()
 
 
 func _build_ui() -> void:
@@ -89,6 +198,38 @@ func _build_ui() -> void:
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	background.pivot_offset = BASE_SIZE / 2.0
 	ui_root.add_child(background)
+
+	# Recordatorio perpetuo minimalista: ESC → Start Menu
+	perpetual_hint_panel = PanelContainer.new()
+	perpetual_hint_panel.position = Vector2(BASE_SIZE.x - 560.0, 40.0)
+	perpetual_hint_panel.z_index = 90
+	perpetual_hint_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	var perp_sb := StyleBoxFlat.new()
+	perp_sb.bg_color = Color(0.08, 0.08, 0.11, 0.92)
+	perp_sb.set_corner_radius_all(14)
+	perp_sb.border_width_left = 2
+	perp_sb.border_width_top = 2
+	perp_sb.border_width_right = 2
+	perp_sb.border_width_bottom = 2
+	perp_sb.border_color = Color(1.0, 0.98, 0.94, 0.45)
+	perp_sb.content_margin_left = 24.0
+	perp_sb.content_margin_right = 24.0
+	perp_sb.content_margin_top = 10.0
+	perp_sb.content_margin_bottom = 10.0
+	perpetual_hint_panel.add_theme_stylebox_override("panel", perp_sb)
+	ui_root.add_child(perpetual_hint_panel)
+
+	perpetual_hint_label = Label.new()
+	perpetual_hint_label.text = "ESC  →  Start Menu"
+	perpetual_hint_label.add_theme_font_size_override("font_size", 28)
+	perpetual_hint_label.add_theme_font_override("font", FREDOKA_FONT)
+	perpetual_hint_label.add_theme_color_override("font_color", ACCENT_COLOR)
+	perpetual_hint_label.add_theme_constant_override("outline_size", 4)
+	perpetual_hint_label.add_theme_color_override("font_outline_color", Color("#08080a"))
+	perpetual_hint_label.add_theme_color_override("font_shadow_color", Color("#000000f5"))
+	perpetual_hint_label.add_theme_constant_override("shadow_offset_x", 2)
+	perpetual_hint_label.add_theme_constant_override("shadow_offset_y", 2)
+	perpetual_hint_panel.add_child(perpetual_hint_label)
 
 	dialogue_panel = Panel.new()
 	dialogue_panel.position = LEON_PANEL_POS
@@ -132,16 +273,31 @@ func _build_ui() -> void:
 	dialogue_label.add_theme_constant_override("shadow_offset_y", 4)
 	dialogue_panel.add_child(dialogue_label)
 
+	# Recordatorio minimalista y legible al terminar el diálogo
+	continue_panel = PanelContainer.new()
+	continue_panel.anchor_left = 0.5
+	continue_panel.anchor_right = 0.5
+	continue_panel.anchor_top = 1.0
+	continue_panel.anchor_bottom = 1.0
+	continue_panel.grow_horizontal = Control.GROW_DIRECTION_BOTH
+	continue_panel.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	continue_panel.z_index = 45
+	continue_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	continue_panel.add_theme_stylebox_override("panel", _make_hint_pill_style())
+	continue_panel.visible = false
+	ui_root.add_child(continue_panel)
+
 	continue_label = Label.new()
-	continue_label.position = Vector2(0, 2065)
-	continue_label.size = Vector2(3840, 70)
 	continue_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	continue_label.z_index = 12
-	continue_label.add_theme_font_size_override("font_size", 40)
+	continue_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	continue_label.add_theme_font_size_override("font_size", 34)
+	continue_label.add_theme_font_override("font", FREDOKA_FONT)
 	continue_label.add_theme_color_override("font_color", ACCENT_COLOR)
-	continue_label.text = "ENTER / SPACE"
+	continue_label.add_theme_constant_override("outline_size", 5)
+	continue_label.add_theme_color_override("font_outline_color", Color("#08080a"))
+	continue_label.text = "ENTER TO CONTINUE"
 	continue_label.visible = false
-	ui_root.add_child(continue_label)
+	continue_panel.add_child(continue_label)
 
 	eye_open_overlay = ColorRect.new()
 	eye_open_overlay.position = Vector2.ZERO
@@ -162,6 +318,143 @@ func _build_ui() -> void:
 	mind_heartbeat_player = AudioStreamPlayer.new()
 	mind_heartbeat_player.pitch_scale = 2.0
 	add_child(mind_heartbeat_player)
+
+
+func _build_leave_confirm_ui() -> void:
+	leave_confirm_overlay = ColorRect.new()
+	leave_confirm_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	leave_confirm_overlay.color = Color(0.0, 0.0, 0.0, 0.72)
+	leave_confirm_overlay.z_index = 120
+	leave_confirm_overlay.visible = false
+	leave_confirm_overlay.mouse_filter = Control.MOUSE_FILTER_STOP
+	ui_root.add_child(leave_confirm_overlay)
+
+	var center_box := CenterContainer.new()
+	center_box.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	center_box.mouse_filter = Control.MOUSE_FILTER_STOP
+	leave_confirm_overlay.add_child(center_box)
+
+	leave_confirm_panel = PanelContainer.new()
+	leave_confirm_panel.custom_minimum_size = Vector2(1180.0, 440.0)
+	leave_confirm_panel.mouse_filter = Control.MOUSE_FILTER_STOP
+	var modal_sb := StyleBoxFlat.new()
+	modal_sb.bg_color = Color(0.11, 0.12, 0.16, 0.98)
+	modal_sb.set_corner_radius_all(24)
+	modal_sb.border_width_left = 4
+	modal_sb.border_width_top = 4
+	modal_sb.border_width_right = 4
+	modal_sb.border_width_bottom = 4
+	modal_sb.border_color = Color(GOLD_ACCENT.r, GOLD_ACCENT.g, GOLD_ACCENT.b, 0.88)
+	modal_sb.content_margin_left = 56.0
+	modal_sb.content_margin_right = 56.0
+	modal_sb.content_margin_top = 48.0
+	modal_sb.content_margin_bottom = 48.0
+	leave_confirm_panel.add_theme_stylebox_override("panel", modal_sb)
+	center_box.add_child(leave_confirm_panel)
+
+	var vb := VBoxContainer.new()
+	vb.add_theme_constant_override("separation", 42)
+	leave_confirm_panel.add_child(vb)
+
+	var q_lbl := Label.new()
+	q_lbl.text = "do you really want to leave ?"
+	q_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	q_lbl.add_theme_font_size_override("font_size", 54)
+	q_lbl.add_theme_font_override("font", FREDOKA_FONT)
+	q_lbl.add_theme_color_override("font_color", TEXT_COLOR)
+	q_lbl.add_theme_constant_override("outline_size", 4)
+	q_lbl.add_theme_color_override("font_outline_color", Color("#08080a"))
+	vb.add_child(q_lbl)
+
+	var btn_row := HBoxContainer.new()
+	btn_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	btn_row.add_theme_constant_override("separation", 48)
+	vb.add_child(btn_row)
+
+	leave_yes_btn = Button.new()
+	leave_yes_btn.text = "Yes  [SPACE]"
+	leave_yes_btn.custom_minimum_size = Vector2(360.0, 96.0)
+	leave_yes_btn.add_theme_font_size_override("font_size", 40)
+	leave_yes_btn.add_theme_font_override("font", FREDOKA_FONT)
+	var yes_sb := StyleBoxFlat.new()
+	yes_sb.bg_color = Color(0.24, 0.14, 0.16, 0.96)
+	yes_sb.set_corner_radius_all(16)
+	yes_sb.border_width_left = 3
+	yes_sb.border_width_top = 3
+	yes_sb.border_width_right = 3
+	yes_sb.border_width_bottom = 3
+	yes_sb.border_color = MIND_COLOR
+	leave_yes_btn.add_theme_stylebox_override("normal", yes_sb)
+	leave_yes_btn.add_theme_stylebox_override("hover", yes_sb)
+	leave_yes_btn.add_theme_color_override("font_color", TEXT_COLOR)
+	leave_yes_btn.pressed.connect(_go_to_start_menu)
+	btn_row.add_child(leave_yes_btn)
+
+	leave_no_btn = Button.new()
+	leave_no_btn.text = "No  [ESC]"
+	leave_no_btn.custom_minimum_size = Vector2(360.0, 96.0)
+	leave_no_btn.add_theme_font_size_override("font_size", 40)
+	leave_no_btn.add_theme_font_override("font", FREDOKA_FONT)
+	var no_sb := StyleBoxFlat.new()
+	no_sb.bg_color = Color(0.16, 0.18, 0.23, 0.96)
+	no_sb.set_corner_radius_all(16)
+	no_sb.border_width_left = 3
+	no_sb.border_width_top = 3
+	no_sb.border_width_right = 3
+	no_sb.border_width_bottom = 3
+	no_sb.border_color = Color(1.0, 1.0, 1.0, 0.45)
+	leave_no_btn.add_theme_stylebox_override("normal", no_sb)
+	leave_no_btn.add_theme_stylebox_override("hover", no_sb)
+	leave_no_btn.add_theme_color_override("font_color", TEXT_COLOR)
+	leave_no_btn.pressed.connect(_close_leave_confirm)
+	btn_row.add_child(leave_no_btn)
+
+
+func _open_leave_confirm() -> void:
+	if leave_dialog_open:
+		return
+	leave_dialog_open = true
+	leave_confirm_overlay.visible = true
+	leave_confirm_overlay.move_to_front()
+
+
+func _close_leave_confirm() -> void:
+	leave_dialog_open = false
+	leave_confirm_overlay.visible = false
+
+
+func _go_to_start_menu() -> void:
+	_guardar_estado_actual()
+	leave_dialog_open = false
+	mind_heartbeat_player.stop()
+	mind_breath_player.stop()
+	typewriter_player.stop()
+
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	if save_mgr != null and save_mgr.has_method("volver_al_inicio"):
+		save_mgr.volver_al_inicio()
+		return
+
+	if ResourceLoader.exists("res://main.tscn"):
+		get_tree().call_deferred("change_scene_to_file", "res://main.tscn")
+	elif ResourceLoader.exists("res://Main.tscn"):
+		get_tree().call_deferred("change_scene_to_file", "res://Main.tscn")
+
+
+func _make_hint_pill_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.08, 0.11, 0.92)
+	style.set_corner_radius_all(14)
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.border_color = Color(1.0, 0.98, 0.94, 0.45)
+	style.content_margin_left = 28.0
+	style.content_margin_right = 28.0
+	style.content_margin_top = 8.0
+	style.content_margin_bottom = 8.0
+	return style
 
 
 func _play_eye_open_fade() -> void:
@@ -343,7 +636,8 @@ func _show_entry() -> void:
 		return
 
 	current_entry = entries[entry_index]
-	continue_label.visible = false
+	_guardar_estado_actual()
+	_set_continue_visible(false)
 	dialogue_panel.visible = true
 	dialogue_label.visible = true
 
@@ -368,6 +662,7 @@ func _show_entry() -> void:
 		dialogue_label.text = current_entry.text
 		is_typing = false
 		waiting_for_input = true
+		_set_continue_visible(true, "ENTER TO CONTINUE")
 	else:
 		_type_words(token)
 
@@ -392,6 +687,7 @@ func _type_words(token: int) -> void:
 			typewriter_player.stop()
 		is_typing = false
 		waiting_for_input = true
+		_set_continue_visible(true, "ENTER TO CONTINUE")
 
 
 func _advance() -> void:
@@ -404,17 +700,35 @@ func _advance() -> void:
 		dialogue_label.text = current_entry.text
 		is_typing = false
 		waiting_for_input = true
+		_set_continue_visible(true, "ENTER TO CONTINUE")
 		return
 
 	if waiting_for_input:
+		_set_continue_visible(false)
 		entry_index += 1
 		_show_entry()
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_ESCAPE:
+			get_viewport().set_input_as_handled()
+			if leave_dialog_open:
+				_close_leave_confirm()
+			else:
+				_open_leave_confirm()
+			return
+		if leave_dialog_open and (event.keycode == KEY_SPACE or event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER):
+			get_viewport().set_input_as_handled()
+			_go_to_start_menu()
+			return
+
+	if leave_dialog_open:
+		return
+
 	var advance_pressed := false
 	if event is InputEventKey:
-		advance_pressed = event.pressed and not event.echo and (event.keycode == KEY_ENTER or event.keycode == KEY_SPACE)
+		advance_pressed = event.pressed and not event.echo and (event.keycode == KEY_ENTER or event.keycode == KEY_KP_ENTER or event.keycode == KEY_SPACE)
 	elif event is InputEventMouseButton:
 		advance_pressed = event.pressed and event.button_index == MOUSE_BUTTON_LEFT
 
@@ -554,26 +868,29 @@ func _show_ending() -> void:
 
 	waiting_for_input = false
 	is_typing = false
+	_set_continue_visible(false)
 	mind_heartbeat_player.stop()
 	mind_breath_player.stop()
 
-	var destino := "res://Level3.tscn"
+	var destino := next_scene_path.strip_edges()
+	if destino.is_empty():
+		destino = "res://Level3.tscn"
 	if not ResourceLoader.exists(destino):
-		push_error("No existe res://Level3.tscn")
+		push_error("No existe %s" % destino)
 		ending_triggered = false
 		return
 
 	var save_manager := get_node_or_null("/root/SaveManager")
-	if save_manager != null:
-		save_manager.guardar_progreso(destino, "scene15")
+	if save_manager != null and save_manager.has_method("guardar_progreso"):
+		save_manager.guardar_progreso(destino, "Level 3", {"step": 0}, _obtener_slot_activo())
 
 	var packed := ResourceLoader.load(destino) as PackedScene
 	if packed == null:
-		push_error("No se pudo cargar Level3.tscn. Revisa si hay un error rojo en level_3.gd.")
+		push_error("No se pudo cargar %s. Revisa si hay un error rojo en el script del nivel." % destino)
 		ending_triggered = false
 		return
 
 	var err := get_tree().change_scene_to_packed(packed)
 	if err != OK:
-		push_error("Error al cambiar a Level3.tscn: " + str(err))
+		push_error("Error al cambiar a %s: %s" % [destino, str(err)])
 		ending_triggered = false
