@@ -24,6 +24,8 @@ var eyes_canvas: Control
 var eye_openness: float = 1.0
 var eye_twitch: Vector2 = Vector2.ZERO
 var slots_panel: Panel
+var slots_scroll: ScrollContainer
+var slots_vbox: VBoxContainer
 var rng := RandomNumberGenerator.new()
 
 
@@ -33,8 +35,20 @@ func _ready() -> void:
 	set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	first_game_scene = _resolve_first_game_scene()
 	_build_ui()
+
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	if save_mgr != null:
+		if save_mgr.has_signal("slot_deleted") and not save_mgr.slot_deleted.is_connected(_on_save_changed):
+			save_mgr.slot_deleted.connect(_on_save_changed)
+		if save_mgr.has_signal("save_completed") and not save_mgr.save_completed.is_connected(_on_save_changed):
+			save_mgr.save_completed.connect(_on_save_changed)
+
 	_spawn_intrusive_whispers_loop()
 	_blink_eyes_loop()
+
+
+func _on_save_changed(_slot: int = -1) -> void:
+	_refresh_slots_ui()
 
 
 func _resolve_first_game_scene() -> String:
@@ -42,14 +56,12 @@ func _resolve_first_game_scene() -> String:
 	if not first_game_scene.is_empty() and first_game_scene != current_menu_path and ResourceLoader.exists(first_game_scene):
 		return first_game_scene
 
-	# 1. Busca cualquier .tscn existente que tenga adjunto visual_novel.gd
 	var by_script := _find_scene_with_script("res://", "visual_novel.gd", current_menu_path)
 	if by_script.is_empty():
 		by_script = _find_scene_with_script("res://", "novela_visual.gd", current_menu_path)
 	if not by_script.is_empty():
 		return by_script
 
-	# 2. Comprueba rutas candidatas habituales
 	var candidates := [
 		"res://visual_novel.tscn",
 		"res://scenes/visual_novel.tscn",
@@ -62,7 +74,6 @@ func _resolve_first_game_scene() -> String:
 		if path != current_menu_path and ResourceLoader.exists(path):
 			return path
 
-	# 3. Si no existe ningún .tscn para la novela visual, lo genera automáticamente
 	var vn_script_path := _find_file_recursive("res://", "visual_novel.gd")
 	if not vn_script_path.is_empty() and ResourceLoader.exists(vn_script_path):
 		var target_tscn := "res://visual_novel.tscn"
@@ -158,7 +169,6 @@ func _build_ui() -> void:
 	whispers_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	add_child(whispers_layer)
 
-	# Ojos afilados y perturbadores dibujados por vectores
 	eyes_canvas = Control.new()
 	eyes_canvas.position = Vector2(BASE_SIZE.x * 0.5 - 520.0, 210.0)
 	eyes_canvas.size = Vector2(1040.0, 300.0)
@@ -166,7 +176,6 @@ func _build_ui() -> void:
 	eyes_canvas.draw.connect(_on_eyes_canvas_draw)
 	add_child(eyes_canvas)
 
-	# Título con tipografía manuscrita rasgada (RockSalt)
 	var title_lbl := Label.new()
 	title_lbl.position = Vector2(0.0, 560.0)
 	title_lbl.size = Vector2(BASE_SIZE.x, 210.0)
@@ -201,14 +210,13 @@ func _build_ui() -> void:
 	btn_quit.pressed.connect(func() -> void: get_tree().quit())
 	menu_vbox.add_child(btn_quit)
 
-	# Letras inferiores más grandes, nítidas y centradas
 	var info_lbl := Label.new()
-	info_lbl.position = Vector2(120.0, 1950.0)
-	info_lbl.size = Vector2(BASE_SIZE.x - 240.0, 110.0)
+	info_lbl.position = Vector2(120.0, 2020.0)
+	info_lbl.size = Vector2(BASE_SIZE.x - 240.0, 90.0)
 	info_lbl.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	info_lbl.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
-	info_lbl.text = "Auto-save is active at all times  •  Press [ESC] during gameplay to return to Main Menu"
-	info_lbl.add_theme_font_size_override("font_size", 44)
+	info_lbl.text = "Manual save on exit  •  Press [ESC] during gameplay to save or return to Main Menu"
+	info_lbl.add_theme_font_size_override("font_size", 42)
 	info_lbl.add_theme_font_override("font", FREDOKA_FONT)
 	info_lbl.add_theme_color_override("font_color", Color("#e5e0d8"))
 	info_lbl.add_theme_constant_override("outline_size", 5)
@@ -216,8 +224,8 @@ func _build_ui() -> void:
 	add_child(info_lbl)
 
 	slots_panel = Panel.new()
-	slots_panel.position = Vector2(BASE_SIZE.x * 0.5 - 560.0, 1340.0)
-	slots_panel.size = Vector2(1120.0, 560.0)
+	slots_panel.position = Vector2(BASE_SIZE.x * 0.5 - 640.0, 1290.0)
+	slots_panel.size = Vector2(1280.0, 700.0)
 	slots_panel.visible = false
 	var st := StyleBoxFlat.new()
 	st.bg_color = Color(0.08, 0.08, 0.10, 0.96)
@@ -227,37 +235,128 @@ func _build_ui() -> void:
 	slots_panel.add_theme_stylebox_override("panel", st)
 	add_child(slots_panel)
 
-	var slots_vbox := VBoxContainer.new()
-	slots_vbox.position = Vector2(60.0, 44.0)
-	slots_vbox.size = Vector2(1000.0, 470.0)
-	slots_vbox.add_theme_constant_override("separation", 24)
-	slots_panel.add_child(slots_vbox)
+	slots_scroll = ScrollContainer.new()
+	slots_scroll.position = Vector2(44.0, 36.0)
+	slots_scroll.size = Vector2(1192.0, 628.0)
+	slots_scroll.horizontal_scroll_mode = ScrollContainer.SCROLL_MODE_DISABLED
+	slots_panel.add_child(slots_scroll)
+
+	slots_vbox = VBoxContainer.new()
+	slots_vbox.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	slots_vbox.add_theme_constant_override("separation", 20)
+	slots_scroll.add_child(slots_vbox)
+
+	_refresh_slots_ui()
+
+
+func _get_max_slots_count(save_mgr: Node) -> int:
+	if save_mgr == null:
+		return 6
+	if save_mgr.has_method("get_max_slots"):
+		return maxi(1, int(save_mgr.call("get_max_slots")))
+	if "MAX_SLOTS" in save_mgr:
+		return maxi(1, int(save_mgr.get("MAX_SLOTS")))
+	return 6
+
+
+func _delete_slot_and_refresh(save_mgr: Node, slot_idx: int) -> void:
+	if save_mgr == null:
+		return
+	if save_mgr.has_method("borrar_slot"):
+		save_mgr.call("borrar_slot", slot_idx)
+	elif save_mgr.has_method("borrar_partida"):
+		save_mgr.call("borrar_partida", slot_idx)
+	elif save_mgr.has_method("eliminar_slot"):
+		save_mgr.call("eliminar_slot", slot_idx)
+	_refresh_slots_ui()
+
+
+func _refresh_slots_ui() -> void:
+	if not is_instance_valid(slots_vbox):
+		return
+	for child in slots_vbox.get_children():
+		child.queue_free()
 
 	var save_mgr := get_node_or_null("/root/SaveManager")
-	for slot_idx in range(1, 4):
+	var max_slots := _get_max_slots_count(save_mgr)
+
+	for slot_idx in range(1, max_slots + 1):
+		var row := HBoxContainer.new()
+		row.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_theme_constant_override("separation", 18)
+		slots_vbox.add_child(row)
+
+		var info: Dictionary = {}
+		if save_mgr != null and save_mgr.has_method("obtener_info_slot"):
+			info = save_mgr.obtener_info_slot(slot_idx)
+
+		var is_empty: bool = info.is_empty() or bool(info.get("vacio", info.get("empty", true)))
+
 		var slot_btn := Button.new()
-		slot_btn.custom_minimum_size = Vector2(1000.0, 130.0)
-		slot_btn.add_theme_font_size_override("font_size", 32)
+		slot_btn.custom_minimum_size = Vector2(0.0, 116.0)
+		slot_btn.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slot_btn.add_theme_font_size_override("font_size", 30)
 		slot_btn.add_theme_font_override("font", FREDOKA_FONT)
-		var info: Dictionary = save_mgr.obtener_info_slot(slot_idx) if save_mgr != null else {}
-		if info.is_empty():
+		slot_btn.add_theme_color_override("font_color", Color("#fff9f0"))
+
+		var slot_sb := StyleBoxFlat.new()
+		slot_sb.bg_color = Color(0.14, 0.14, 0.18, 0.95)
+		slot_sb.set_corner_radius_all(14)
+		slot_sb.set_border_width_all(2)
+		slot_sb.border_color = Color(1.0, 1.0, 1.0, 0.28) if is_empty else Color("#f5d08a")
+		slot_btn.add_theme_stylebox_override("normal", slot_sb)
+
+		if is_empty:
 			slot_btn.text = "Slot %d  —  [Empty] (Start New Game)" % slot_idx
 		else:
-			slot_btn.text = "Slot %d  —  %s  (%s)" % [slot_idx, info.get("stage_name", ""), info.get("timestamp", "")]
+			var stage_str: String = str(info.get("stage_name", "Chapter %d" % int(info.get("chapter", 1))))
+			var ts_str: String = str(info.get("timestamp", info.get("fecha", info.get("updated_at", ""))))
+			slot_btn.text = "Slot %d  —  %s  (%s)" % [slot_idx, stage_str, ts_str]
+
+		var captured_slot := slot_idx
+		var captured_empty := is_empty
 		slot_btn.pressed.connect(func() -> void:
 			var target := _resolve_first_game_scene()
 			if save_mgr == null:
 				if not target.is_empty() and ResourceLoader.exists(target):
 					get_tree().change_scene_to_file(target)
 				return
-			if info.is_empty():
-				save_mgr.iniciar_nueva_partida(slot_idx, target)
-				if is_inside_tree() and get_tree().current_scene == self and not target.is_empty():
+
+			if captured_empty:
+				if save_mgr.has_method("iniciar_nueva_partida"):
+					save_mgr.iniciar_nueva_partida(target, captured_slot)
+				elif not target.is_empty() and ResourceLoader.exists(target):
 					get_tree().change_scene_to_file(target)
 			else:
-				save_mgr.cargar_slot(slot_idx)
+				if save_mgr.has_method("cargar_partida"):
+					save_mgr.cargar_partida(captured_slot, target)
+				else:
+					var data: Dictionary = save_mgr.cargar_slot(captured_slot)
+					var scene_path := str(data.get("scene_path", data.get("current_scene", target)))
+					if not scene_path.is_empty() and ResourceLoader.exists(scene_path):
+						get_tree().change_scene_to_file(scene_path)
 		)
-		slots_vbox.add_child(slot_btn)
+		row.add_child(slot_btn)
+
+		var del_btn := Button.new()
+		del_btn.custom_minimum_size = Vector2(210.0, 116.0)
+		del_btn.text = "Delete"
+		del_btn.disabled = is_empty
+		del_btn.add_theme_font_size_override("font_size", 30)
+		del_btn.add_theme_font_override("font", FREDOKA_FONT)
+		del_btn.add_theme_color_override("font_color", Color("#fff9f0") if not is_empty else Color(1.0, 1.0, 1.0, 0.35))
+
+		var del_sb := StyleBoxFlat.new()
+		del_sb.bg_color = Color(0.28, 0.10, 0.13, 0.95) if not is_empty else Color(0.11, 0.11, 0.13, 0.55)
+		del_sb.set_corner_radius_all(14)
+		del_sb.set_border_width_all(2)
+		del_sb.border_color = Color("#ff4d4d") if not is_empty else Color(1.0, 1.0, 1.0, 0.15)
+		del_btn.add_theme_stylebox_override("normal", del_sb)
+
+		del_btn.pressed.connect(func() -> void:
+			_delete_slot_and_refresh(save_mgr, captured_slot)
+		)
+		row.add_child(del_btn)
 
 
 func _on_eyes_canvas_draw() -> void:
@@ -276,7 +375,6 @@ func _draw_scary_eye(pos: Vector2, side: float, openness: float, look_offset: Ve
 	var h_bot: float = 48.0 * openness
 	var slant: float = 32.0 * side
 
-	# Forma rasgada y afilada con ceño fruncido hacia el centro
 	var eye_poly := PackedVector2Array([
 		pos + Vector2(-w, slant * 0.45),
 		pos + Vector2(-w * 0.35, -h_top + slant * 0.2),
@@ -287,10 +385,8 @@ func _draw_scary_eye(pos: Vector2, side: float, openness: float, look_offset: Ve
 		pos + Vector2(-w, slant * 0.45)
 	])
 
-	# Fondo oscuro ensangrentado de la esclerótica
 	eyes_canvas.draw_colored_polygon(eye_poly, Color("#1f0204"))
 
-	# Pupila estrecha y vertical de pánico que sigue el cursor
 	if openness > 0.18:
 		var pupil_center: Vector2 = pos + look_offset * Vector2(1.0, 0.45 * openness)
 		var rx: float = 14.0
@@ -300,11 +396,8 @@ func _draw_scary_eye(pos: Vector2, side: float, openness: float, look_offset: Ve
 			var a: float = (float(i) / 24.0) * TAU
 			pupil_pts.append(pupil_center + Vector2(cos(a) * rx, sin(a) * ry))
 		eyes_canvas.draw_colored_polygon(pupil_pts, Color("#ff1e26"))
-
-		# Brillo diminuto inquietante en la pupila
 		eyes_canvas.draw_circle(pupil_center + Vector2(-4.0, -9.0 * openness), 3.4, Color(1.0, 0.88, 0.88, 0.9))
 
-	# Borde afilado rojo brillante
 	eyes_canvas.draw_polyline(eye_poly, Color("#ff2a2a"), 5.5, true)
 
 
@@ -374,10 +467,12 @@ func _on_new_game_pressed() -> void:
 
 	var save_mgr := get_node_or_null("/root/SaveManager")
 	if save_mgr != null and save_mgr.has_method("iniciar_nueva_partida"):
-		save_mgr.iniciar_nueva_partida(1, target)
-	if is_inside_tree() and get_tree().current_scene == self:
+		save_mgr.iniciar_nueva_partida(target, -1)
+	elif is_inside_tree() and get_tree().current_scene == self:
 		get_tree().change_scene_to_file(target)
 
 
 func _on_toggle_slots_pressed() -> void:
 	slots_panel.visible = not slots_panel.visible
+	if slots_panel.visible:
+		_refresh_slots_ui()

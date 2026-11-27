@@ -16,10 +16,10 @@ const XCARLET_COLOR := Color("#5bc0eb")
 
 # Tamaño estándar y posiciones (3840x2160)
 const DIALOGUE_PANEL_SIZE := Vector2(1240.0, 230.0)
-const LEON_PANEL_POS := Vector2(1060.0, 230.0)         # Arriba de la cabeza de Leon (scene15)
-const JAMMY_CENTER_POS := Vector2(1300.0, 960.0)       # Centro de pantalla (scene15)
-const XCARLET_PANEL_POS := Vector2(2150.0, 220.0)      # Arriba de la cabeza de Xcarlet (scene16)
-const JAMMY_LEFT_CENTER_POS := Vector2(520.0, 960.0)   # Centro-izquierda para no tapar a Xcarlet (scene16)
+const LEON_PANEL_POS := Vector2(1060.0, 230.0)
+const JAMMY_CENTER_POS := Vector2(1300.0, 960.0)
+const XCARLET_PANEL_POS := Vector2(2150.0, 220.0)
+const JAMMY_LEFT_CENTER_POS := Vector2(520.0, 960.0)
 const SPEAKER_PANEL_SIZE := Vector2(320.0, 62.0)
 
 const FREDOKA_FONT = preload("res://fonts/Fredoka-Regular.ttf")
@@ -94,23 +94,31 @@ func _obtener_slot_activo() -> int:
 
 
 func _aplicar_guardado_cargado() -> void:
-	var extra_data: Dictionary = {}
+	var loaded_extra: Dictionary = {}
 	if get_tree().has_meta("loaded_save_extra"):
 		var raw_meta = get_tree().get_meta("loaded_save_extra")
 		if raw_meta is Dictionary:
-			extra_data = raw_meta
+			loaded_extra = (raw_meta as Dictionary).duplicate(true)
 		get_tree().remove_meta("loaded_save_extra")
 
-	if extra_data.is_empty():
-		var save_mgr := get_node_or_null("/root/SaveManager")
-		if save_mgr != null and "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
-			extra_data = save_mgr.extra_data
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	if loaded_extra.is_empty() and save_mgr != null:
+		if "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
+			loaded_extra = (save_mgr.extra_data as Dictionary).duplicate(true)
+		elif "current_progress" in save_mgr and save_mgr.current_progress is Dictionary:
+			var cp: Dictionary = save_mgr.current_progress
+			if bool(cp.get("is_new_game", false)):
+				entry_index = 0
+				return
+			loaded_extra = cp.duplicate(true)
 
 	var saved_idx: int = -1
-	if extra_data.has("entry_index"):
-		saved_idx = int(extra_data["entry_index"])
-	elif extra_data.has("step"):
-		saved_idx = int(extra_data["step"])
+	if loaded_extra.has("entry_index"):
+		saved_idx = int(loaded_extra["entry_index"])
+	elif loaded_extra.has("step"):
+		saved_idx = int(loaded_extra["step"])
+	elif loaded_extra.has("step_index"):
+		saved_idx = int(loaded_extra["step_index"])
 
 	if saved_idx >= 0 and entries.size() > 0:
 		entry_index = clampi(saved_idx, 0, entries.size() - 1)
@@ -199,7 +207,6 @@ func _build_ui() -> void:
 	background.pivot_offset = BASE_SIZE / 2.0
 	ui_root.add_child(background)
 
-	# Recordatorio perpetuo minimalista: ESC → Start Menu
 	perpetual_hint_panel = PanelContainer.new()
 	perpetual_hint_panel.position = Vector2(BASE_SIZE.x - 560.0, 40.0)
 	perpetual_hint_panel.z_index = 90
@@ -273,7 +280,6 @@ func _build_ui() -> void:
 	dialogue_label.add_theme_constant_override("shadow_offset_y", 4)
 	dialogue_panel.add_child(dialogue_label)
 
-	# Recordatorio minimalista y legible al terminar el diálogo
 	continue_panel = PanelContainer.new()
 	continue_panel.anchor_left = 0.5
 	continue_panel.anchor_right = 0.5
@@ -465,7 +471,6 @@ func _play_eye_open_fade() -> void:
 
 func _build_script() -> void:
 	entries = [
-		# --- SCENE 15 ---
 		{
 			"image": "scene15.png",
 			"text": "Welcome... welcome everybody! You made a clever decision choosing Reed College. I can assure you that Oregon is one of the most magical places in the world, especially when talking about its nature and atmosphere. It fits you perfectly, because every artist needs inspiration—our fuel.",
@@ -494,8 +499,6 @@ func _build_script() -> void:
 			"kind": "spoken",
 			"speaker": "Leon James"
 		},
-
-		# --- SCENE 16 ---
 		{
 			"image": "scene16.png",
 			"text": "Hi again, new bestie!",
@@ -882,7 +885,7 @@ func _show_ending() -> void:
 
 	var save_manager := get_node_or_null("/root/SaveManager")
 	if save_manager != null and save_manager.has_method("guardar_progreso"):
-		save_manager.guardar_progreso(destino, "Level 3", {"step": 0}, _obtener_slot_activo())
+		save_manager.guardar_progreso(destino, "Level 3", {"step": 0, "entry_index": 0}, _obtener_slot_activo())
 
 	var packed := ResourceLoader.load(destino) as PackedScene
 	if packed == null:

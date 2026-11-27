@@ -140,23 +140,31 @@ func _ready() -> void:
 	_show_entry()
 
 func _aplicar_guardado_cargado() -> void:
-	var extra_data: Dictionary = {}
+	var loaded_extra: Dictionary = {}
 	if get_tree().has_meta("loaded_save_extra"):
 		var raw_meta = get_tree().get_meta("loaded_save_extra")
 		if raw_meta is Dictionary:
-			extra_data = raw_meta
+			loaded_extra = (raw_meta as Dictionary).duplicate(true)
 		get_tree().remove_meta("loaded_save_extra")
 
-	if extra_data.is_empty():
-		var save_mgr := get_node_or_null("/root/SaveManager")
-		if save_mgr != null and "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
-			extra_data = save_mgr.extra_data
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	if loaded_extra.is_empty() and save_mgr != null:
+		if "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
+			loaded_extra = (save_mgr.extra_data as Dictionary).duplicate(true)
+		elif "current_progress" in save_mgr and save_mgr.current_progress is Dictionary:
+			var cp: Dictionary = save_mgr.current_progress
+			if bool(cp.get("is_new_game", false)):
+				entry_index = 0
+				return
+			loaded_extra = cp.duplicate(true)
 
 	var saved_idx: int = -1
-	if extra_data.has("entry_index"):
-		saved_idx = int(extra_data["entry_index"])
-	elif extra_data.has("step"):
-		saved_idx = int(extra_data["step"])
+	if loaded_extra.has("entry_index"):
+		saved_idx = int(loaded_extra["entry_index"])
+	elif loaded_extra.has("step"):
+		saved_idx = int(loaded_extra["step"])
+	elif loaded_extra.has("step_index"):
+		saved_idx = int(loaded_extra["step_index"])
 
 	if saved_idx >= 0 and entries.size() > 0:
 		entry_index = clampi(saved_idx, 0, entries.size() - 1)
@@ -706,7 +714,6 @@ func _build_browser_ui() -> void:
 	window_box.add_theme_constant_override("separation", 0)
 	browser_root.add_child(window_box)
 
-	# 1. Barra de pestañas
 	var tab_strip: PanelContainer = PanelContainer.new()
 	tab_strip.custom_minimum_size = Vector2(0.0, 84.0)
 	tab_strip.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -764,7 +771,6 @@ func _build_browser_ui() -> void:
 	plus_tab.add_theme_color_override("font_color", Color("#9aa0a6"))
 	tab_hbox.add_child(plus_tab)
 
-	# 2. Barra de direcciones
 	var url_bar: PanelContainer = PanelContainer.new()
 	url_bar.custom_minimum_size = Vector2(0.0, 96.0)
 	url_bar.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -813,7 +819,6 @@ func _build_browser_ui() -> void:
 	browser_url_label.add_theme_color_override("font_color", Color("#bdc1c6"))
 	address_pill.add_child(browser_url_label)
 
-	# 3. Área principal tipo dashboard de búsqueda: barra arriba, Summary arriba, hipervínculos debajo
 	var page_bg: PanelContainer = PanelContainer.new()
 	page_bg.size_flags_vertical = Control.SIZE_EXPAND_FILL
 	page_bg.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -894,7 +899,6 @@ func _build_browser_ui() -> void:
 	divider.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	page_vbox.add_child(divider)
 
-	# Contenedor del dashboard: Summary arriba + hipervínculos debajo
 	browser_results_container = VBoxContainer.new()
 	browser_results_container.visible = false
 	browser_results_container.modulate.a = 0.0
@@ -902,7 +906,6 @@ func _build_browser_ui() -> void:
 	browser_results_container.add_theme_constant_override("separation", 22)
 	page_vbox.add_child(browser_results_container)
 
-	# 1. Summary arriba
 	var summary_panel: PanelContainer = PanelContainer.new()
 	summary_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	var summary_sb: StyleBoxFlat = StyleBoxFlat.new()
@@ -940,7 +943,6 @@ func _build_browser_ui() -> void:
 	)
 	summary_vbox.add_child(summary_body)
 
-	# 2. Hipervínculos de resultados debajo del Summary (8 resultados para llenar bien la pantalla)
 	var links_list: VBoxContainer = VBoxContainer.new()
 	links_list.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	links_list.add_theme_constant_override("separation", 18)
@@ -1020,7 +1022,6 @@ func _build_browser_ui() -> void:
 		snippet_lbl.add_theme_color_override("font_color", Color("#bdc1c6"))
 		link_block.add_child(snippet_lbl)
 
-	# Cursor de Jammy interactuando
 	browser_cursor = Control.new()
 	browser_cursor.z_index = 12
 	browser_cursor.mouse_filter = Control.MOUSE_FILTER_IGNORE
@@ -2105,7 +2106,7 @@ func _show_ending() -> void:
 
 	var save_mgr := get_node_or_null("/root/SaveManager")
 	if save_mgr != null and save_mgr.has_method("guardar_progreso") and siguiente_escena != "res://main.tscn":
-		save_mgr.guardar_progreso(siguiente_escena, "Scene 15", {})
+		save_mgr.guardar_progreso(siguiente_escena, "Scene 15", {"entry_index": 0, "step": 0})
 
 	var eye_trans: Node = get_node_or_null("/root/EyeTransition")
 	if eye_trans != null and eye_trans.has_method("ir_a_escena_cerrando_ojos"):
