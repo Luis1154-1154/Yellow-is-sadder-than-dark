@@ -2,16 +2,14 @@ extends Node2D
 
 signal nivel_completado
 
-# --- AJUSTES RÁPIDOS EN EL INSPECTOR DE LEVEL2 ---
 @export var background_texture: Texture2D
-@export_file("*.tscn") var siguiente_escena: String = "" # Si se deja vacío, busca scene15.tscn automáticamente
-@export var piso_y: float = 1820.0                        # Altura de la banqueta donde pisan los personajes
-@export var escala_gato: float = 1.0                      # Tamaño de Kitty (su ancho define cada paso)
-@export var escala_persona: float = 1.0                   # Tamaño de la persona y la bolsa
-@export var tiempo_inicial: float = 5.0                   # Tiempo en el primer paso
-@export var tiempo_minimo: float = 2.7                    # Tiempo en el último paso (dificultad suavizada)
+@export_file("*.tscn") var siguiente_escena: String = ""
+@export var piso_y: float = 1820.0
+@export var escala_gato: float = 1.0
+@export var escala_persona: float = 1.0
+@export var tiempo_inicial: float = 5.0
+@export var tiempo_minimo: float = 2.7
 
-# --- ESTILO HOMOGENIZADO CON VISUAL_NOVEL_3.GD ---
 const BASE_SIZE := Vector2(3840.0, 2160.0)
 const TEXT_COLOR := Color("#fff9f0")
 const PANEL_COLOR := Color(0.14, 0.16, 0.20, 0.94)
@@ -34,13 +32,11 @@ const FREDOKA_FONT = preload("res://fonts/Fredoka-Regular.ttf")
 const MEOW_STREAM = preload("res://assets/sounds/meow.mp3")
 const CATS_FIGHTING_STREAM = preload("res://assets/sounds/catsFighting.mp3")
 
-# --- TEXTURAS DE TUS PERSONAJES ---
 const TEX_KITTY = preload("res://assets/characters/kitty.png")
 const TEX_PERSON_BAG = preload("res://assets/characters/personWithBag.png")
 const TEX_PERSON_FLY = preload("res://assets/characters/personFromLevel2.png")
 const TEX_BAG = preload("res://assets/characters/bag.png")
 
-# --- NODOS CREADOS POR CÓDIGO ---
 var background: Sprite2D
 var kitty: Sprite2D
 var person_with_bag: Sprite2D
@@ -51,7 +47,6 @@ var meow_dialogue_player: AudioStreamPlayer
 var meow_step_player: AudioStreamPlayer
 var cats_fighting_player: AudioStreamPlayer
 
-# --- ESTADO DEL MINIJUEGO ---
 enum Estado {
 	DIALOGO_KITTY,
 	INSTRUCCION,
@@ -67,7 +62,7 @@ var transicionando_escena: bool = false
 const VOCALES: Array[String] = ["A", "E", "I", "O", "U"]
 var teclas_objetivo: Array[String] = []
 var teclas_completadas: Array[bool] = [false, false, false, false]
-var teclas_sostenidas: Dictionary = {} # Evita presiones simultáneas o repetición mientras se mantiene pulsada
+var teclas_sostenidas: Dictionary = {}
 
 var start_x: float = 450.0
 var ancho_paso: float = 358.0
@@ -78,7 +73,6 @@ var ronda_actual: int = 0
 var tiempo_ronda_actual: float = 5.0
 var tiempo_restante: float = 5.0
 
-# Físicas y efectos de choque
 var vel_persona: Vector2 = Vector2.ZERO
 var vel_bolsa: Vector2 = Vector2.ZERO
 var bolsa_suelo_y: float = 0.0
@@ -86,14 +80,12 @@ var bolsa_rebotes: int = 0
 var bolsa_detenida: bool = false
 var shake_intensidad: float = 0.0
 
-# --- VARIABLES DE DIÁLOGO ---
 const KITTY_TEXT := "Hmmm... Today's a good day to steal things by meow-crashing into people!"
 const KITTY_WIN_TEXT := "Hehehe! Heist accomplished, the bag is mine now!"
 var texto_dialogo_actual: String = KITTY_TEXT
 var is_typing: bool = false
 var typing_token: int = 0
 
-# --- INTERFAZ (UI) ---
 var ui_layer: CanvasLayer
 var flash_rect: ColorRect
 var dialogue_panel: Panel
@@ -101,7 +93,6 @@ var dialogue_label: Label
 var speaker_panel: Panel
 var speaker_label: Label
 
-# Recordatorio perpetuo de menú (solo ESC) + modal de confirmación
 var perpetual_hint_panel: PanelContainer
 var perpetual_hint_label: Label
 var leave_confirm_overlay: ColorRect
@@ -110,7 +101,6 @@ var leave_yes_btn: Button
 var leave_no_btn: Button
 var leave_dialog_open: bool = false
 
-# Indicaciones atractivas del minijuego
 var panel_instruccion_top: PanelContainer
 var label_instruccion_top: Label
 var barra_tiempo: ProgressBar
@@ -126,9 +116,29 @@ func _ready() -> void:
 	crear_escenario_y_personajes()
 	construir_ui()
 	construir_leave_confirm_ui()
-	_aplicar_guardado_cargado()
-	_guardar_estado_nivel2()
+	_resetear_a_inicio_limpio()
 	mostrar_dialogo_kitty(KITTY_TEXT, false)
+
+
+func _resetear_a_inicio_limpio() -> void:
+	ronda_actual = 0
+	estado_actual = Estado.DIALOGO_KITTY
+	teclas_sostenidas.clear()
+	teclas_completadas = [false, false, false, false]
+	if get_tree().has_meta("loaded_save_extra"):
+		get_tree().remove_meta("loaded_save_extra")
+	if kitty != null:
+		kitty.position = Vector2(start_x, kitty_base_y)
+		kitty.scale = Vector2(escala_gato, escala_gato)
+		kitty.visible = true
+	if person_with_bag != null:
+		person_with_bag.visible = true
+	if person_flying != null:
+		person_flying.visible = false
+	if bag_flying != null:
+		bag_flying.visible = false
+	if camera != null:
+		camera.position = Vector2(start_x + 1200.0, 1080.0)
 
 
 func _obtener_slot_activo() -> int:
@@ -144,62 +154,25 @@ func _obtener_slot_activo() -> int:
 
 
 func _aplicar_guardado_cargado() -> void:
-	var extra_data: Dictionary = {}
-	if get_tree().has_meta("loaded_save_extra"):
-		var raw_meta = get_tree().get_meta("loaded_save_extra")
-		if raw_meta is Dictionary:
-			extra_data = raw_meta
-		get_tree().remove_meta("loaded_save_extra")
-
-	if extra_data.is_empty():
-		var save_mgr := get_node_or_null("/root/SaveManager")
-		if save_mgr != null and "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
-			extra_data = save_mgr.extra_data
-
-	var saved_ronda: int = -1
-	if extra_data.has("ronda_actual"):
-		saved_ronda = int(extra_data["ronda_actual"])
-	elif extra_data.has("step"):
-		saved_ronda = int(extra_data["step"])
-
-	if saved_ronda >= 0:
-		ronda_actual = clampi(saved_ronda, 0, maxi(pasos_hasta_objetivo - 1, 0))
-		kitty.position.x = start_x + (ancho_paso * float(ronda_actual))
-		camera.position.x = kitty.position.x + 850.0
+	# Level2 nunca restaura progreso intermedio; siempre empieza limpio desde el inicio.
+	_resetear_a_inicio_limpio()
 
 
 func _guardar_estado_nivel2() -> void:
-	var save_mgr := get_node_or_null("/root/SaveManager")
-	if save_mgr == null or not save_mgr.has_method("guardar_progreso"):
-		return
+	# Desactivado intencionalmente: Level2 no guarda estado intermedio ni pasos.
+	pass
 
-	var scene_file: String = scene_file_path
-	if scene_file.is_empty():
-		var current_scene := get_tree().current_scene
-		if current_scene != null:
-			scene_file = current_scene.scene_file_path
-	if scene_file.is_empty():
-		return
 
-	var etiqueta: String = "Level 2 (Step %d/%d)" % [ronda_actual, maxi(pasos_hasta_objetivo, 1)]
-	var extra_info: Dictionary = {
-		"ronda_actual": ronda_actual,
-		"step": ronda_actual
+func obtener_estado_guardado() -> Dictionary:
+	# Si el CanvasLayer de pausa pide estado de esta escena, devolver siempre inicio limpio.
+	return {
+		"ronda_actual": 0,
+		"step": 0
 	}
-	var slot_id: int = _obtener_slot_activo()
 
-	var accepts_slot: bool = false
-	for m in save_mgr.get_method_list():
-		if str(m.get("name", "")) == "guardar_progreso":
-			var args: Array = m.get("args", [])
-			if args.size() >= 4:
-				accepts_slot = true
-			break
 
-	if accepts_slot:
-		save_mgr.call("guardar_progreso", scene_file, etiqueta, extra_info, slot_id)
-	else:
-		save_mgr.call("guardar_progreso", scene_file, etiqueta, extra_info)
+func aplicar_estado_guardado(_state: Dictionary) -> void:
+	_resetear_a_inicio_limpio()
 
 
 func _limpiar_borde_textura(tex: Texture2D, margen: int = 4) -> Texture2D:
@@ -238,7 +211,6 @@ func crear_escenario_y_personajes() -> void:
 				background_texture = load(ruta)
 				break
 
-	# 1. Fondo escalado al alto 4K (2160 px) sin espacios negros
 	background = Sprite2D.new()
 	background.centered = false
 	background.position = Vector2.ZERO
@@ -253,7 +225,6 @@ func crear_escenario_y_personajes() -> void:
 		background.scale = Vector2(escala_4k, escala_4k)
 		ancho_mundo = tex_size.x * escala_4k
 
-	# 2. Gato (Kitty): cada paso equivale exactamente a 1 vez su propio ancho
 	kitty = Sprite2D.new()
 	kitty.texture = TEX_KITTY
 	kitty.scale = Vector2(escala_gato, escala_gato)
@@ -264,7 +235,6 @@ func crear_escenario_y_personajes() -> void:
 	kitty.position = Vector2(start_x, kitty_base_y)
 	add_child(kitty)
 
-	# 3. Persona con bolsa ubicada hasta el final del escenario panorámico
 	person_with_bag = Sprite2D.new()
 	person_with_bag.texture = _limpiar_borde_textura(TEX_PERSON_BAG, 4)
 	person_with_bag.scale = Vector2(escala_persona, escala_persona)
@@ -275,12 +245,10 @@ func crear_escenario_y_personajes() -> void:
 	person_with_bag.position = Vector2(persona_x, persona_y)
 	add_child(person_with_bag)
 
-	# Calcular cuántos pasos de 1 cuerpo de ancho cubren todo el recorrido hasta chocarla
 	var distancia_contacto: float = ancho_paso * 0.65
 	meta_choque_x = persona_x - distancia_contacto
 	pasos_hasta_objetivo = maxi(1, int(round((meta_choque_x - start_x) / ancho_paso)))
 
-	# 4. Sprites separados para el choque final
 	person_flying = Sprite2D.new()
 	person_flying.texture = _limpiar_borde_textura(TEX_PERSON_FLY, 4)
 	person_flying.scale = Vector2(escala_persona, escala_persona)
@@ -295,7 +263,6 @@ func crear_escenario_y_personajes() -> void:
 	bag_flying.visible = false
 	add_child(bag_flying)
 
-	# 5. Cámara 2D limitada al ancho exacto del escenario
 	camera = Camera2D.new()
 	camera.enabled = true
 	camera.limit_left = 0
@@ -305,7 +272,6 @@ func crear_escenario_y_personajes() -> void:
 	camera.position = Vector2(start_x + 1200.0, 1080.0)
 	add_child(camera)
 
-	# 6. Reproductores de sonido
 	meow_dialogue_player = AudioStreamPlayer.new()
 	meow_dialogue_player.stream = MEOW_STREAM
 	add_child(meow_dialogue_player)
@@ -324,7 +290,6 @@ func construir_ui() -> void:
 	ui_layer.layer = 10
 	add_child(ui_layer)
 
-	# Destello de impacto
 	flash_rect = ColorRect.new()
 	flash_rect.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	flash_rect.color = Color(1.0, 0.96, 0.78, 0.0)
@@ -332,7 +297,6 @@ func construir_ui() -> void:
 	flash_rect.z_index = 20
 	ui_layer.add_child(flash_rect)
 
-	# Recordatorio perpetuo de menú: mismo contraste que en visual_novel_3.gd
 	perpetual_hint_panel = PanelContainer.new()
 	perpetual_hint_panel.position = Vector2(BASE_SIZE.x - 560.0, 40.0)
 	perpetual_hint_panel.z_index = 90
@@ -364,7 +328,6 @@ func construir_ui() -> void:
 	perpetual_hint_label.add_theme_constant_override("shadow_offset_y", 2)
 	perpetual_hint_panel.add_child(perpetual_hint_label)
 
-	# --- 1. CAJA DE DIÁLOGO E INSTRUCCIÓN HOMOGENIZADA ---
 	dialogue_panel = Panel.new()
 	dialogue_panel.position = DIALOGUE_PANEL_POS
 	dialogue_panel.size = DIALOGUE_PANEL_SIZE
@@ -400,7 +363,6 @@ func construir_ui() -> void:
 	dialogue_label.add_theme_font_override("font", FREDOKA_FONT)
 	dialogue_panel.add_child(dialogue_label)
 
-	# --- 2. INSTRUCCIÓN SUPERIOR DURANTE EL MINIJUEGO ---
 	panel_instruccion_top = PanelContainer.new()
 	panel_instruccion_top.position = Vector2(1170.0, 42.0)
 	panel_instruccion_top.custom_minimum_size = Vector2(1500.0, 118.0)
@@ -419,7 +381,6 @@ func construir_ui() -> void:
 	label_instruccion_top.add_theme_color_override("font_outline_color", Color("#08080a"))
 	panel_instruccion_top.add_child(label_instruccion_top)
 
-	# --- 3. BARRA DEL TEMPORIZADOR ---
 	barra_tiempo = ProgressBar.new()
 	barra_tiempo.min_value = 0.0
 	barra_tiempo.max_value = tiempo_inicial
@@ -445,7 +406,6 @@ func construir_ui() -> void:
 	barra_tiempo.add_theme_stylebox_override("fill", barra_fill_style)
 	ui_layer.add_child(barra_tiempo)
 
-	# --- 4. CONTENEDOR ATRACTIVO DE LAS 4 VOCALES (ESTILO KEYCAP) ---
 	hbox_teclas = HBoxContainer.new()
 	hbox_teclas.alignment = BoxContainer.ALIGNMENT_CENTER
 	hbox_teclas.add_theme_constant_override("separation", 44)
@@ -595,18 +555,26 @@ func _close_leave_confirm() -> void:
 
 
 func _go_to_start_menu() -> void:
-	_guardar_estado_nivel2()
+	# Guardar Level2 desde el principio (sin paso ni salto a scene 15) si el jugador decide salir aquí.
+	var save_mgr := get_node_or_null("/root/SaveManager")
+	var my_scene := scene_file_path
+	if my_scene.is_empty() and get_tree().current_scene != null:
+		my_scene = get_tree().current_scene.scene_file_path
+	if save_mgr != null and not my_scene.is_empty() and save_mgr.has_method("guardar_progreso"):
+		save_mgr.guardar_progreso(my_scene, "Level 2", {"ronda_actual": 0, "step": 0}, _obtener_slot_activo())
+
 	leave_dialog_open = false
 	meow_dialogue_player.stop()
 	meow_step_player.stop()
 	cats_fighting_player.stop()
 
-	var save_mgr := get_node_or_null("/root/SaveManager")
 	if save_mgr != null and save_mgr.has_method("volver_al_inicio"):
 		save_mgr.volver_al_inicio()
 		return
 
-	if ResourceLoader.exists("res://main.tscn"):
+	if ResourceLoader.exists("res://main_menu.tscn"):
+		get_tree().call_deferred("change_scene_to_file", "res://main_menu.tscn")
+	elif ResourceLoader.exists("res://main.tscn"):
 		get_tree().call_deferred("change_scene_to_file", "res://main.tscn")
 	elif ResourceLoader.exists("res://Main.tscn"):
 		get_tree().call_deferred("change_scene_to_file", "res://Main.tscn")
@@ -973,7 +941,6 @@ func _unhandled_input(event: InputEvent) -> void:
 		return
 
 	if estado_actual == Estado.JUGANDO and event is InputEventKey and event.pressed and not event.echo:
-		# Impide presionar varias teclas a la vez mientras otra siga sostenida
 		if not teclas_sostenidas.is_empty():
 			return
 		if event.keycode >= KEY_A and event.keycode <= KEY_Z:
@@ -998,7 +965,6 @@ func verificar_tecla_presionada(letra: String) -> void:
 func avanzar_un_paso() -> void:
 	estado_actual = Estado.ANIMANDO_PASO
 	ronda_actual += 1
-	_guardar_estado_nivel2()
 
 	meow_step_player.stop()
 	meow_step_player.play()
@@ -1029,7 +995,6 @@ func fallar_y_regresar_al_inicio() -> void:
 	estado_actual = Estado.ANIMANDO_PASO
 	ronda_actual = 0
 	teclas_sostenidas.clear()
-	_guardar_estado_nivel2()
 
 	for i in range(4):
 		cajas_teclas[i].add_theme_stylebox_override("panel", _make_keycap_style("error"))
@@ -1047,7 +1012,6 @@ func ejecutar_choque_final() -> void:
 	panel_instruccion_top.visible = false
 	barra_tiempo.visible = false
 	hbox_teclas.visible = false
-	_guardar_estado_nivel2()
 
 	cats_fighting_player.stop()
 	cats_fighting_player.play(10.0)

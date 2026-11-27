@@ -60,7 +60,8 @@ enum GameState {
 	INSTRUCTION_SCREEN,
 	TURN_BANNER,
 	PLAYING,
-	GAME_OVER
+	GAME_OVER,
+	TIE_DIALOGUE
 }
 
 var state: GameState = GameState.INTRO_DIALOGUE
@@ -103,7 +104,7 @@ var leave_no_btn: Button
 var leave_dialog_open := false
 var mouse_mode_before_leave_dialog := Input.MOUSE_MODE_VISIBLE
 
-# Cuadro de diálogo de Louis y barra minimalista inferior persistente
+# Cuadro de diálogo y barra minimalista inferior persistente
 var dialogue_panel: Panel
 var dialogue_label: Label
 var speaker_panel: Panel
@@ -156,6 +157,7 @@ var ai_fire_delay := 0.0
 var targets: Array[Dictionary] = []
 
 var intro_full_text := "The game is basically earning points by shooting the hunters. Watch out for the monkeys! Luck!!"
+var tie_full_text := "I bet that you wanna climb there anyways."
 var intro_typing := false
 var intro_token := 0
 var ending_triggered := false
@@ -456,7 +458,6 @@ func _get_or_create_root_player(node_name: String) -> AudioStreamPlayer:
 
 
 func _setup_persistent_fair_audio() -> void:
-	# 1. Audio general de la feria (fair'sAudio): continúa exactamente donde iba, nunca se reinicia
 	fair_ambience_player = _get_or_create_root_player(FAIR_AMBIENCE_NODE_NAME)
 	fair_ambience_player.volume_db = linear_to_db(FAIR_AMBIENCE_IN_LEVEL_LINEAR)
 
@@ -477,7 +478,6 @@ func _setup_persistent_fair_audio() -> void:
 						fair_ambience_player.play(FAIR_AUDIO_LOOP_START)
 				, CONNECT_ONE_SHOT)
 
-	# 2. Música de la galería de tiro (backgroundShooting.mp3): continúa desde fairScenes sin reiniciarse
 	shooting_bgm_player = _get_or_create_root_player(SHOOTING_BGM_NODE_NAME)
 	shooting_bgm_player.volume_db = linear_to_db(SHOOTING_BGM_IN_LEVEL_LINEAR)
 
@@ -684,7 +684,6 @@ func _build_ui() -> void:
 	background.texture = tex_bg
 	ui_root.add_child(background)
 
-	# Ventana recortada dentro del marco verde
 	gallery_window = Control.new()
 	gallery_window.position = GALLERY_WINDOW_RECT.position
 	gallery_window.size = GALLERY_WINDOW_RECT.size
@@ -697,10 +696,8 @@ func _build_ui() -> void:
 	targets_layer.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	gallery_window.add_child(targets_layer)
 
-	# Borde superior del mostrador amarillo delante de los palos para que nunca se monten encima
 	_build_counter_foreground()
 
-	# Brazos con escopeta: proporción original intacta y base oculta debajo del borde inferior
 	var gun_size := _calc_proportional_size(tex_machine_gun, GUN_HEIGHT)
 	arm_sprite = TextureRect.new()
 	arm_sprite.size = gun_size
@@ -810,7 +807,7 @@ func _build_ui() -> void:
 	timer_label.add_theme_color_override("font_color", LOUIS_COLOR)
 	round_panel.add_child(timer_label)
 
-	# --- CUADRO DE DIÁLOGO DE LOUIS LIBERTÉ (ABAJO AL CENTRO) ---
+	# --- CUADRO DE DIÁLOGO (ABAJO AL CENTRO) ---
 	var dial_pos := Vector2(1280.0, 1825.0)
 	var dial_size := Vector2(1280.0, 250.0)
 	var louis_border := Color(LOUIS_COLOR.r, LOUIS_COLOR.g, LOUIS_COLOR.b, 0.78)
@@ -858,7 +855,7 @@ func _build_ui() -> void:
 	dialogue_label.add_theme_constant_override("shadow_offset_y", 3)
 	dialogue_panel.add_child(dialogue_label)
 
-	# --- BARRA MINIMALISTA INFERIOR DE CONTROLES (HOMOGENEIZADA) ---
+	# --- BARRA MINIMALISTA INFERIOR DE CONTROLES ---
 	continue_panel = PanelContainer.new()
 	continue_panel.anchor_left = 0.5
 	continue_panel.anchor_right = 0.5
@@ -880,7 +877,7 @@ func _build_ui() -> void:
 	continue_label.text = "ENTER / SPACE"
 	continue_panel.add_child(continue_label)
 
-	# --- TARJETA DE INSTRUCCIONES CON TECLAS TÁCTILES E INSIGNIAS ---
+	# --- TARJETA DE INSTRUCCIONES ---
 	instruction_box_panel = PanelContainer.new()
 	instruction_box_panel.position = Vector2((BASE_SIZE.x - 1780.0) * 0.5, (BASE_SIZE.y - 360.0) * 0.5)
 	instruction_box_panel.size = Vector2(1780.0, 360.0)
@@ -895,7 +892,6 @@ func _build_ui() -> void:
 	card_vbox.add_theme_constant_override("separation", 24)
 	instruction_box_panel.add_child(card_vbox)
 
-	# Fila 1: Controles con keycaps
 	var controls_row := HBoxContainer.new()
 	controls_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	controls_row.add_theme_constant_override("separation", 16)
@@ -924,14 +920,12 @@ func _build_ui() -> void:
 	controls_row.add_child(_make_ui_label("/", font_regular, 34, CARD_MUTED_COLOR))
 	controls_row.add_child(_make_keycap("SPACE", 32))
 
-	# Separador horizontal
 	var h_sep := ColorRect.new()
 	h_sep.custom_minimum_size = Vector2(1500.0, 3.0)
 	h_sep.size_flags_horizontal = Control.SIZE_SHRINK_CENTER
 	h_sep.color = DIVIDER_COLOR
 	card_vbox.add_child(h_sep)
 
-	# Fila 2: Reglas de puntuación con insignias
 	var rules_row := HBoxContainer.new()
 	rules_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	rules_row.add_theme_constant_override("separation", 16)
@@ -948,7 +942,6 @@ func _build_ui() -> void:
 	rules_row.add_child(_make_ui_label("MONKEYS", font_bold, 42, MONKEY_BADGE_COLOR))
 	rules_row.add_child(_make_score_pill("-2", MONKEY_BADGE_COLOR, 34))
 
-	# Fila 3: Confirmación con tecla ENTER destacada
 	var start_row := HBoxContainer.new()
 	start_row.alignment = BoxContainer.ALIGNMENT_CENTER
 	start_row.add_theme_constant_override("separation", 14)
@@ -1173,7 +1166,6 @@ func _configure_target_role(t: Dictionary, is_hunter: bool) -> void:
 	if tex == null:
 		tex = tex_hunter if tex_hunter != null else tex_monkey
 
-	# La punta de ambos palos entra 22 px detrás de la línea amarilla para no flotar ni montarse encima
 	var target_height := 670.0 if is_hunter else 640.0
 	var bottom_sink := 22.0
 	var item_size := _calc_proportional_size(tex, target_height)
@@ -1230,6 +1222,11 @@ func _spawn_gallery_targets() -> void:
 func _start_intro_dialogue() -> void:
 	state = GameState.INTRO_DIALOGUE
 	state_input_lock = 0.15
+	speaker_label.text = "Louis Liberté"
+	speaker_label.add_theme_color_override("font_color", LOUIS_COLOR)
+	dialogue_panel.add_theme_stylebox_override("panel", _make_box_style(PANEL_COLOR, Color(LOUIS_COLOR.r, LOUIS_COLOR.g, LOUIS_COLOR.b, 0.78), 3))
+	speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, LOUIS_COLOR))
+
 	dialogue_panel.visible = true
 	speaker_panel.visible = true
 	continue_label.text = "ENTER / SPACE"
@@ -1243,11 +1240,34 @@ func _start_intro_dialogue() -> void:
 	dialogue_label.text = ""
 	intro_typing = true
 	intro_token += 1
-	_type_intro_words(intro_token)
+	_type_dialogue_words(intro_token, intro_full_text)
 
 
-func _type_intro_words(token: int) -> void:
-	var words := intro_full_text.split(" ")
+func _start_tie_dialogue() -> void:
+	state = GameState.TIE_DIALOGUE
+	state_input_lock = 0.15
+	center_banner_panel.visible = false
+	instruction_box_panel.visible = false
+	arm_sprite.visible = false
+
+	speaker_label.text = "Jammy"
+	speaker_label.add_theme_color_override("font_color", JAMMY_COLOR)
+	dialogue_panel.add_theme_stylebox_override("panel", _make_box_style(PANEL_COLOR, Color(JAMMY_COLOR.r, JAMMY_COLOR.g, JAMMY_COLOR.b, 0.78), 3))
+	speaker_panel.add_theme_stylebox_override("panel", _make_speaker_style(SPEAKER_BG_COLOR, JAMMY_COLOR))
+
+	dialogue_panel.visible = true
+	speaker_panel.visible = true
+	continue_label.text = "ENTER / SPACE"
+	continue_panel.visible = true
+
+	dialogue_label.text = ""
+	intro_typing = true
+	intro_token += 1
+	_type_dialogue_words(intro_token, tie_full_text)
+
+
+func _type_dialogue_words(token: int, full_text: String) -> void:
+	var words := full_text.split(" ")
 	for i in range(words.size()):
 		if token != intro_token:
 			return
@@ -1294,7 +1314,6 @@ func _begin_turn_banner() -> void:
 	center_banner_sub.visible = false
 	center_banner_panel.visible = true
 
-	# Levanta todos los objetivos al iniciar cada turno según la dificultad de la ronda
 	var h_chance: float = float(diff["hunter_chance"])
 	for i in range(targets.size()):
 		var t := targets[i]
@@ -1345,7 +1364,6 @@ func _process(delta: float) -> void:
 	if state_input_lock > 0.0:
 		state_input_lock = maxf(0.0, state_input_lock - delta)
 
-	# Mantiene el bucle de fair'sAudio (6:30 a 14:00) continuo sin reiniciarlo
 	if is_instance_valid(fair_ambience_player) and fair_ambience_player.stream != null:
 		if not fair_ambience_player.playing:
 			fair_ambience_player.play(FAIR_AUDIO_LOOP_START)
@@ -1552,11 +1570,13 @@ func _input(event: InputEvent) -> void:
 	if state_input_lock > 0.0:
 		return
 
-	var enter_pressed := _is_enter_pressed(event)
+	var enter_pressed: bool = _is_enter_pressed(event)
+	var space_pressed: bool = (event is InputEventKey and event.pressed and not event.echo and event.keycode == KEY_SPACE)
+	var advance_dialogue_pressed: bool = enter_pressed or space_pressed
 
 	match state:
 		GameState.INTRO_DIALOGUE:
-			if enter_pressed:
+			if advance_dialogue_pressed:
 				get_viewport().set_input_as_handled()
 				if intro_typing:
 					intro_token += 1
@@ -1567,7 +1587,7 @@ func _input(event: InputEvent) -> void:
 					_show_instruction_screen()
 
 		GameState.INSTRUCTION_SCREEN:
-			if enter_pressed:
+			if advance_dialogue_pressed:
 				get_viewport().set_input_as_handled()
 				_begin_turn_banner()
 
@@ -1583,9 +1603,23 @@ func _input(event: InputEvent) -> void:
 				_fire_shotgun()
 
 		GameState.GAME_OVER:
-			if enter_pressed:
+			if advance_dialogue_pressed:
 				get_viewport().set_input_as_handled()
-				_go_to_next_scene()
+				if jammy_score == xcarlet_score:
+					_start_tie_dialogue()
+				else:
+					_go_to_next_scene()
+
+		GameState.TIE_DIALOGUE:
+			if advance_dialogue_pressed:
+				get_viewport().set_input_as_handled()
+				if intro_typing:
+					intro_token += 1
+					dialogue_label.text = tie_full_text
+					intro_typing = false
+					state_input_lock = 0.12
+				else:
+					_go_to_next_scene()
 
 
 func _fire_shotgun() -> void:

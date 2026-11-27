@@ -467,7 +467,10 @@ func _on_new_game_pressed() -> void:
 
 	var save_mgr := get_node_or_null("/root/SaveManager")
 	if save_mgr != null and save_mgr.has_method("iniciar_nueva_partida"):
-		save_mgr.iniciar_nueva_partida(target, -1)
+		var slot_to_use := -1
+		if save_mgr.has_method("find_first_empty_slot"):
+			slot_to_use = int(save_mgr.call("find_first_empty_slot"))
+		save_mgr.iniciar_nueva_partida(target, slot_to_use)
 	elif is_inside_tree() and get_tree().current_scene == self:
 		get_tree().change_scene_to_file(target)
 

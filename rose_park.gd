@@ -151,6 +151,7 @@ var rng := RandomNumberGenerator.new()
 func _ready() -> void:
 	name = "RosePark"
 	process_mode = Node.PROCESS_MODE_ALWAYS
+	get_tree().paused = false
 	rng.randomize()
 	_load_assets()
 	_build_audio()
@@ -163,101 +164,7 @@ func _ready() -> void:
 	if not get_viewport().size_changed.is_connected(_update_viewport_scale):
 		get_viewport().size_changed.connect(_update_viewport_scale)
 
-	var extra := _consume_loaded_extra_data()
-	var start_idx := _resolve_saved_step_index(extra)
-	_restore_state_for_step(start_idx, extra)
-	_save_current_step(start_idx, 0)
-	_run_step(start_idx)
-
-
-func _get_active_slot() -> int:
-	var save_mgr := get_node_or_null("/root/SaveManager")
-	if save_mgr == null:
-		return 1
-	for prop in ["slot_actual", "current_slot", "active_slot", "selected_slot"]:
-		if prop in save_mgr:
-			var val = save_mgr.get(prop)
-			if typeof(val) == TYPE_INT and int(val) > 0:
-				return int(val)
-	return 1
-
-
-func _consume_loaded_extra_data() -> Dictionary:
-	var extra_data: Dictionary = {}
-	if get_tree().has_meta("loaded_save_extra"):
-		var raw_meta = get_tree().get_meta("loaded_save_extra")
-		if raw_meta is Dictionary:
-			extra_data = raw_meta
-		get_tree().remove_meta("loaded_save_extra")
-
-	if extra_data.is_empty():
-		var save_mgr := get_node_or_null("/root/SaveManager")
-		if save_mgr != null and "extra_data" in save_mgr and save_mgr.extra_data is Dictionary:
-			extra_data = save_mgr.extra_data
-
-	return extra_data
-
-
-func _resolve_saved_step_index(extra: Dictionary) -> int:
-	if extra.is_empty() or timeline.is_empty():
-		return 0
-
-	var raw_step = extra.get("step", extra.get("step_index", extra.get("index", 0)))
-	var parsed := 0
-	if typeof(raw_step) == TYPE_INT or typeof(raw_step) == TYPE_FLOAT:
-		parsed = int(raw_step)
-	elif typeof(raw_step) == TYPE_STRING and str(raw_step).strip_edges().is_valid_int():
-		parsed = int(str(raw_step).strip_edges())
-
-	parsed = clampi(parsed, 0, timeline.size() - 1)
-	var step_type := str(timeline[parsed].get("type", "vn"))
-	if step_type in ["panic_crisis", "hospital_blackout"]:
-		parsed = clampi(parsed + 1, 0, timeline.size() - 1)
-
-	return parsed
-
-
-func _restore_state_for_step(idx: int, extra: Dictionary) -> void:
-	if extra.has("sad_bgm_vol"):
-		_ensure_sad_bgm_playing(float(extra["sad_bgm_vol"]))
-	elif idx >= 0 and idx < timeline.size() and timeline[idx].has("sad_bgm_vol"):
-		_ensure_sad_bgm_playing(float(timeline[idx]["sad_bgm_vol"]))
-
-	# Restaurar historial de chat si se carga en un paso de chat o posterior
-	for i in range(mini(idx + 1, timeline.size())):
-		var st := timeline[i]
-		if str(st.get("type", "")) == "chat":
-			if bool(st.get("clear", false)):
-				for child in chat_vbox.get_children():
-					child.queue_free()
-			var inc := bool(st.get("incoming", true))
-			var txt := str(st.get("text", ""))
-			var tm := str(st.get("time", ""))
-			_add_chat_bubble(inc, txt, tm)
-			sidebar_preview_label.text = txt if inc else ("✓✓ " + txt)
-			sidebar_time_label.text = tm
-
-	# Restaurar respiración o llanto si se carga a partir del paso correspondiente
-	for i in range(mini(idx + 1, timeline.size())):
-		var st := timeline[i]
-		if st.get("stop_loop_sfx", false) and is_instance_valid(loop_sfx_player):
-			loop_sfx_player.stop()
-		elif st.has("loop_sfx") and st["loop_sfx"] != null and is_instance_valid(loop_sfx_player):
-			var ls: AudioStream = st["loop_sfx"]
-			if ls is AudioStreamMP3:
-				ls.loop = true
-			if not loop_sfx_player.playing or loop_sfx_player.stream != ls:
-				loop_sfx_player.stream = ls
-				loop_sfx_player.volume_db = 0.0
-				loop_sfx_player.play()
-
-		if bool(st.get("crying_sfx", false)) and sfx_crying != null and is_instance_valid(crying_player):
-			if sfx_crying is AudioStreamMP3:
-				sfx_crying.loop = true
-			if not crying_player.playing or crying_player.stream != sfx_crying:
-				crying_player.stream = sfx_crying
-				crying_player.volume_db = linear_to_db(1.0)
-				crying_player.play(0.0)
+	_run_step(0)
 
 
 func _update_viewport_scale() -> void:
@@ -438,7 +345,14 @@ func _load_snd(names: Array[String], fallback_kws: Array[String]) -> AudioStream
 
 
 func _load_assets() -> void:
-	tex_park = _load_tex(["park'sBackground.png", "parksBackground.png", "parkBackground.png"], ["park"])
+	tex_park = _load_tex([
+		"Park'sBackground.png",
+		"park'sBackground.png",
+		"ParksBackground.png",
+		"parksBackground.png",
+		"ParkBackground.png",
+		"parkBackground.png"
+	], ["park"])
 	tex_kiss = _load_tex(["Kiss.png", "kiss.png", "kissScene.png", "KissScene.png"], ["kiss"])
 	tex_house1 = _load_tex(["House1.png", "house1.png", "House1.jpg", "house1.jpg"], ["house1"])
 	tex_house2 = _load_tex(["House2.jpg", "house2.jpg", "House2.png", "house2.png"], ["house2"])
@@ -866,24 +780,23 @@ func _close_leave_confirm() -> void:
 
 
 func _go_to_start_menu() -> void:
-	_save_current_step(current_index, page_index)
 	leave_dialog_open = false
 	ending_phase = 0
 	ending_phase_elapsed = 0.0
+	get_tree().paused = false
 	if is_instance_valid(leave_confirm_layer):
 		leave_confirm_layer.visible = false
 	if is_instance_valid(crying_player):
 		crying_player.stop()
+	if is_instance_valid(loop_sfx_player):
+		loop_sfx_player.stop()
+	if is_instance_valid(sad_bgm_player):
+		sad_bgm_player.stop()
 
-	var save_mgr := get_node_or_null("/root/SaveManager")
-	if save_mgr != null and save_mgr.has_method("volver_al_inicio"):
-		save_mgr.volver_al_inicio()
-		return
-
-	if ResourceLoader.exists("res://main.tscn"):
-		get_tree().call_deferred("change_scene_to_file", "res://main.tscn")
-	elif ResourceLoader.exists("res://Main.tscn"):
-		get_tree().call_deferred("change_scene_to_file", "res://Main.tscn")
+	for menu_path in ["res://main_menu.tscn", "res://main.tscn", "res://Main.tscn", "res://scenes/main_menu.tscn"]:
+		if ResourceLoader.exists(menu_path):
+			get_tree().call_deferred("change_scene_to_file", menu_path)
+			return
 
 
 func _build_chat_layer() -> void:
@@ -1209,6 +1122,72 @@ func _build_full_timeline() -> void:
 			"main": "Yes, it's OCD."
 		},
 
+		# --- CIERRA Y ABRE LOS OJOS DE NUEVO -> CONVERSACIÓN CON LA MAMÁ EN EL HOSPITAL ---
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy's Mom",
+			"color": MOM_COLOR,
+			"blink_eyes": true,
+			"main": "Were you trying to get my attention?"
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy's Mom",
+			"color": MOM_COLOR,
+			"main": "Well then, you got it, asshole."
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy's Mom",
+			"color": MOM_COLOR,
+			"main": "Why did you do that?"
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy",
+			"color": JAMMY_COLOR,
+			"main": "Because of what you told me."
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy's Mom",
+			"color": MOM_COLOR,
+			"main": "Don't blame me for your decisions, besides, I only told the truth."
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy",
+			"color": JAMMY_COLOR,
+			"main": "But are you going to accept me?"
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy's Mom",
+			"color": MOM_COLOR,
+			"main": "How am I going to accept something that isn't true? Focus on important things instead. Do you think that if that were true, you would try to take your own life? That's only for stupid people. Don't you think about the damage you do to your family by saying that bullshit? Selfish."
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy",
+			"color": JAMMY_COLOR,
+			"main": "If you weren't going to accept your kids unconditionally, you shouldn't have had them."
+		},
+		{
+			"type": "vn",
+			"bg": tex_hospital,
+			"speaker": "Jammy's Mom",
+			"color": MOM_COLOR,
+			"main": "Well, the bad thing is they can't be returned anymore."
+		},
+
 		# --- CIELO ESTRELLADO (SOLO TITILAN LAS ESTRELLAS; AÚN NO SALEN LAS MANOS) ---
 		{
 			"type": "vn",
@@ -1227,78 +1206,50 @@ func _build_full_timeline() -> void:
 			"sad_bgm_vol": 0.5,
 			"speaker": "Xcarlet",
 			"color": XCARLET_COLOR,
-			"main": "Please, I beg you—give yourself another opportunity. I beg you, I beg you! Let me be the star that ignites you when your light isn't enough. I beg you!"
-		},
-
-		# --- AL FINAL: MANO + ESTRELLAS 20s -> PANTALLA NEGRA CON FADE-OUT DE MÚSICA Y LLANTO 20s -> MENÚ ---
-		{
-			"type": "ending_hands"
+			"sfx": NOTIFICATION_STREAM,
+			"main": "Please—give yourself another opportunity. Let me be the star that ignites you when your light isn't enough."
 		}
 	]
 
+	# --- 10 "I BEG YOU!" SEPARADOS CON SU PROPIO AUDIO CADA UNO ---
+	for i in range(10):
+		timeline.append({
+			"type": "vn",
+			"bg": tex_sky_no_lights,
+			"stars_blink": true,
+			"speaker": "Xcarlet",
+			"color": XCARLET_COLOR,
+			"sfx": NOTIFICATION_STREAM,
+			"main": "I beg you!"
+		})
 
-func _resolve_scene_path() -> String:
-	if not scene_file_path.is_empty() and ResourceLoader.exists(scene_file_path):
-		return scene_file_path
-	var current := get_tree().current_scene
-	if current != null and not current.scene_file_path.is_empty() and ResourceLoader.exists(current.scene_file_path):
-		return current.scene_file_path
-	for candidate in [
-		"res://rosePark.tscn",
-		"res://scenes/rosePark.tscn",
-		"res://rose_park.tscn",
-		"res://RosePark.tscn"
-	]:
-		if ResourceLoader.exists(candidate):
-			return candidate
-	return "res://rosePark.tscn"
-
-
-func _save_current_step(idx: int, page: int = 0) -> void:
-	var save_mgr := get_node_or_null("/root/SaveManager")
-	if save_mgr == null or not save_mgr.has_method("guardar_progreso"):
-		return
-
-	var path := _resolve_scene_path()
-	var step := timeline[clampi(idx, 0, maxi(timeline.size() - 1, 0))]
-	var bgm_vol := float(step.get("sad_bgm_vol", 0.5 if idx >= 21 else 1.0))
-	var extra_info: Dictionary = {
-		"step": idx,
-		"step_index": idx,
-		"page_index": page,
-		"sad_bgm_vol": bgm_vol
-	}
-
-	var slot_id := _get_active_slot()
-	var accepts_slot := false
-	for m in save_mgr.get_method_list():
-		if str(m.get("name", "")) == "guardar_progreso":
-			var args: Array = m.get("args", [])
-			if args.size() >= 4:
-				accepts_slot = true
-			break
-
-	if accepts_slot:
-		save_mgr.call("guardar_progreso", path, "RosePark_Part_%d" % (idx + 1), extra_info, slot_id)
-	else:
-		save_mgr.call("guardar_progreso", path, "RosePark_Part_%d" % (idx + 1), extra_info)
+	# --- AL FINAL: MANO + ESTRELLAS 20s -> PANTALLA NEGRA CON FADE-OUT DE MÚSICA Y LLANTO 20s -> MENÚ ---
+	timeline.append({
+		"type": "ending_hands"
+	})
 
 
 func _return_to_main_menu() -> void:
 	ending_phase = 0
 	ending_phase_elapsed = 0.0
+	get_tree().paused = false
 	if is_instance_valid(crying_player):
 		crying_player.stop()
-	var save_mgr := get_node_or_null("/root/SaveManager")
-	if save_mgr != null and save_mgr.has_method("volver_al_inicio"):
-		save_mgr.volver_al_inicio()
+	if is_instance_valid(loop_sfx_player):
+		loop_sfx_player.stop()
+	if is_instance_valid(sad_bgm_player):
+		sad_bgm_player.stop()
+
+	for menu_path in ["res://main_menu.tscn", "res://main.tscn", "res://Main.tscn", "res://scenes/main_menu.tscn"]:
+		if ResourceLoader.exists(menu_path):
+			get_tree().call_deferred("change_scene_to_file", menu_path)
+			return
 
 
 func _run_step(idx: int) -> void:
 	if idx >= timeline.size():
 		return
 	current_index = idx
-	_save_current_step(idx, 0)
 
 	var step := timeline[idx]
 	var step_type: String = step.get("type", "vn")
@@ -1529,7 +1480,6 @@ func _show_current_vn_page() -> void:
 			_run_step(current_index + 1)
 		return
 
-	_save_current_step(current_index, page_index)
 	continue_panel.visible = false
 	var has_main := page_index < main_pages.size()
 	var has_mind := page_index < mind_pages.size()
@@ -1711,7 +1661,6 @@ func _start_ending_sequence() -> void:
 	continue_panel.visible = false
 	menu_hint_panel.visible = false
 
-	# Estrellas visibles titilando detrás de las manos (sin destello agregado)
 	stars_blinking = true
 	stars_fx_layer.visible = true
 	sky_lights_overlay.visible = tex_sky_with_lights != null

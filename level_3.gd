@@ -4,7 +4,6 @@ const BASE_SIZE: Vector2 = Vector2(3840.0, 2160.0)
 const CHARS_DIR: String = "res://assets/characters/"
 const PENCIL_SOUND_PATH: String = "res://assets/sounds/pencil.wav"
 
-# Paleta y medidas homogenizadas (con alto contraste sobre el papel blanco de este nivel)
 const JAMMY_COLOR: Color = Color("#f5d08a")
 const XCARLET_COLOR: Color = Color("#5bc0eb")
 const MIND_COLOR: Color = Color("#ff5a5f")
@@ -23,17 +22,14 @@ const PARALLEL_MIND_PANEL_POS: Vector2 = Vector2(72.0, 136.0)
 const PARALLEL_MIND_PANEL_SIZE: Vector2 = Vector2(1280.0, 260.0)
 const SPEAKER_PANEL_SIZE: Vector2 = Vector2(300.0, 62.0)
 
-# Brazo escalado para cubrir todo el lienzo incluso con zoom sin cortar la manga
 const HAND_SIZE: Vector2 = Vector2(5600.0, 3150.0)
 const JAMMY_TIP_UV: Vector2 = Vector2(0.812, 0.186)
 const XCARLET_TIP_UV: Vector2 = Vector2(0.838, 0.126)
 const OFFSCREEN_TIP_POS: Vector2 = Vector2(-950.0, BASE_SIZE.y + 650.0)
 const HAND_OFFSCREEN_POS: Vector2 = Vector2(-6200.0, 4200.0)
 
-# Máscara de alta definición para revelado limpio
 const MASK_SIZE: Vector2i = Vector2i(1280, 720)
 
-# Parámetros de dificultad
 const MIN_ACCURACY: float = 80.0
 const SNAP_MAX_DIST: float = 18.0
 const STEP_MAX_DIST: float = 17.0
@@ -53,7 +49,6 @@ var black_screen_rect: ColorRect
 var jammy_hand_rect: TextureRect
 var xcarlet_hand_rect: TextureRect
 
-# Barra Kawaii de Accuracy
 var kawaii_panel: Panel
 var kawaii_title_label: Label
 var kawaii_percent_label: Label
@@ -61,7 +56,6 @@ var kawaii_bar_bg: Panel
 var kawaii_bar_fill: ColorRect
 var kawaii_threshold_mark: ColorRect
 
-# Recordatorios accesibles, espaciados y legibles: Enter, Menú (ESC) y Controles
 var hud_enter_panel: PanelContainer
 var hud_enter_label: Label
 var hud_menu_panel: PanelContainer
@@ -69,28 +63,23 @@ var hud_menu_label: Label
 var hud_controls_panel: PanelContainer
 var hud_controls_label: Label
 
-# Modal de confirmación al salir con ESC
 var leave_confirm_overlay: ColorRect
 var leave_confirm_panel: PanelContainer
 var leave_yes_btn: Button
 var leave_no_btn: Button
 var leave_dialog_open: bool = false
 
-# Cuadro rojo del TOC con tres puntos fijos centrados (sin etiqueta de Jammy)
 var thought_dots_panel: Panel
 var thought_dots_label: Label
 var thought_dots_tween: Tween
 
-# Cuadro rojo paralelo en la esquina superior izquierda (sin etiqueta de Jammy)
 var parallel_mind_panel: Panel
 var parallel_mind_label: Label
 
-# Cartel blanco de instrucciones homogenizado (usado solo al iniciar la fase interactiva)
 var instruction_panel: Panel
 var instruction_label: RichTextLabel
 var is_instruction_in_top_right: bool = false
 
-# Cuadro de diálogo homogenizado
 var dialogue_panel: Panel
 var dialogue_label: Label
 var speaker_panel: Panel
@@ -103,7 +92,6 @@ var pencil_stream: AudioStream
 
 var cached_char_files: PackedStringArray = PackedStringArray()
 
-# Texturas cargadas
 var tex_jammy_1: Texture2D
 var tex_xcarlet_2: Texture2D
 var tex_jammy_2: Texture2D
@@ -112,7 +100,6 @@ var tex_jammy_3: Texture2D
 var tex_both: Texture2D
 var tex_xcarlet_1_tex: Texture2D
 
-# Máscara dinámica de opacidad
 var mask_image: Image
 var mask_texture: ImageTexture
 var mask_snapshot: PackedByteArray
@@ -146,18 +133,15 @@ var delayed_return_phase: Phase = Phase.JAMMY_1_CHAIN
 var jammy_strokes_queue: Array[Dictionary] = []
 var current_stroke_idx: int = 0
 
-# Datos precisos de las firmas en la esquina inferior derecha
 var active_jammy_ink_pts: PackedVector2Array = PackedVector2Array()
 var active_xcarlet_ink_pts: PackedVector2Array = PackedVector2Array()
 var active_signatures_split_x: float = 3502.0
 
-# Colas de cuadros divididos (evita desbordamientos tanto abajo como en el cuadro rojo)
 var dialogue_queue: Array[Dictionary] = []
 var dialogue_queue_idx: int = 0
 var parallel_mind_queue: Array[String] = []
 var parallel_mind_queue_idx: int = 0
 
-# Control bidireccional desde cualquier extremo/punto sobre la línea punteada
 var active_guide_points: PackedVector2Array = PackedVector2Array()
 var guide_covered: Array[bool] = []
 var is_closed_loop: bool = false
@@ -169,11 +153,9 @@ var has_last_sample_pos: bool = false
 var last_sample_pos: Vector2 = Vector2.ZERO
 var sample_scores: Array[float] = []
 
-# Control fluido del sonido del lápiz sin cortes ni golpeteos
 var is_pencil_actively_drawing: bool = false
 var pencil_idle_timer: float = 0.0
 
-# Estado de zoom de cámara sobre el lienzo
 var current_zoom: float = 1.0
 var zoom_tween: Tween
 
@@ -462,7 +444,6 @@ func _make_minimal_pill_style(
 
 
 func _build_minimal_reminders() -> void:
-	# 1. Controles del juego: esquina superior izquierda (sin repetir ENTER)
 	hud_controls_panel = PanelContainer.new()
 	hud_controls_panel.position = Vector2(72.0, 42.0)
 	hud_controls_panel.z_index = 95
@@ -483,7 +464,6 @@ func _build_minimal_reminders() -> void:
 	hud_controls_label.add_theme_color_override("font_outline_color", Color("#08080a"))
 	hud_controls_panel.add_child(hud_controls_label)
 
-	# 2. Menú: esquina superior derecha
 	hud_menu_panel = PanelContainer.new()
 	hud_menu_panel.anchor_left = 1.0
 	hud_menu_panel.anchor_right = 1.0
@@ -511,7 +491,6 @@ func _build_minimal_reminders() -> void:
 	hud_menu_label.add_theme_color_override("font_outline_color", Color("#08080a"))
 	hud_menu_panel.add_child(hud_menu_label)
 
-	# 3. Recordatorio inferior de Enter: tamaño homogenizado con el resto de píldoras
 	hud_enter_panel = PanelContainer.new()
 	hud_enter_panel.anchor_left = 0.5
 	hud_enter_panel.anchor_right = 0.5
@@ -1136,9 +1115,6 @@ func _update_dialogue_prompt(is_blocking_wait: bool) -> void:
 		_set_enter_reminder_visible(false)
 
 
-# ==============================================================================
-# CONTROL DE ZOOM SUAVE SOBRE EL ÁREA A CONTORNEAR Y RELEASE A 1.0x
-# ==============================================================================
 func _set_camera_zoom(target_scale: float, focus_norm: Vector2, duration: float = 0.55) -> void:
 	if zoom_tween != null and zoom_tween.is_valid():
 		zoom_tween.kill()
@@ -1171,9 +1147,6 @@ func _screen_to_canvas(screen_pt: Vector2) -> Vector2:
 	return (screen_pt - canvas_container.position) / maxf(canvas_container.scale.x, 0.001)
 
 
-# ==============================================================================
-# CONTROL EXCLUSIVO DE MANOS CON ENTRADA Y SALIDA SUAVE (CERO GLITCHES)
-# ==============================================================================
 func _get_hand_tip_screen_pos(hand: TextureRect, tip_uv: Vector2) -> Vector2:
 	return hand.position + Vector2(hand.size.x * tip_uv.x, hand.size.y * tip_uv.y)
 
@@ -1286,9 +1259,6 @@ func _stop_pencil_sound() -> void:
 		pencil_player.stop()
 
 
-# ==============================================================================
-# GENERADORES DE FORMAS EXACTAS DEL DIBUJO (ESLABONES, GOTAS FINAS, FIRMAS)
-# ==============================================================================
 func _build_chain_links_strokes() -> Array[Dictionary]:
 	var link_centers: Array[Vector2] = [
 		Vector2(0.443, 0.568),
@@ -1537,9 +1507,6 @@ func _build_smooth_cat_signature_strokes(cat_rect: Rect2, min_allowed_x: float) 
 	return strokes
 
 
-# ==============================================================================
-# FLUJO DE TURNOS DE XCARLET Y JAMMY
-# ==============================================================================
 func _start_phase(phase: Phase) -> void:
 	current_phase = phase
 	_guardar_estado_level3(current_phase, current_stroke_idx)
@@ -1796,9 +1763,6 @@ func _start_phase(phase: Phase) -> void:
 			_finish_scene()
 
 
-# ==============================================================================
-# MECÁNICA INTERACTIVA BIDIRECCIONAL CON FEEDBACK REAL EN TIEMPO REAL
-# ==============================================================================
 func _begin_jammy_interactive_queue() -> void:
 	current_stroke_idx = 0
 	_guardar_estado_level3(current_phase, current_stroke_idx)
@@ -2266,9 +2230,6 @@ func _execute_post_jammy_phase(completed_phase: Phase) -> void:
 			_start_dialogue("Xcarlet", "And why sunshine?", XCARLET_COLOR, false, true)
 
 
-# ==============================================================================
-# ANIMACIONES REALISTAS TRAZO A TRAZO + COMPLETADO INSTANTÁNEO SIN LAG
-# ==============================================================================
 func _animate_xcarlet_heart_outline() -> void:
 	_set_exclusive_hand("xcarlet")
 	var left_lobe: PackedVector2Array = _norm_to_screen([
@@ -2524,9 +2485,6 @@ func _sweep_hand_along_path(
 		await get_tree().create_timer(step_time).timeout
 
 
-# ==============================================================================
-# DIBUJO DE LÍNEAS PUNTEADAS FINAS QUE CAMBIAN DE COLOR EN CUALQUIER SENTIDO
-# ==============================================================================
 func _on_guide_canvas_draw() -> void:
 	if active_guide_points.size() < 2 or guide_covered.size() != active_guide_points.size():
 		return
@@ -2544,9 +2502,6 @@ func _on_guide_canvas_draw() -> void:
 		guide_canvas.draw_line(p1, p2, col, 3.0, true)
 
 
-# ==============================================================================
-# UTILIDADES DE MÁSCARA, GEOMETRÍA Y BARRA DE ACCURACY GRADUAL
-# ==============================================================================
 func _clear_mask(alpha_val: float) -> void:
 	if reveal_material != null:
 		reveal_material.set_shader_parameter("extra_reveal", 0.0)
@@ -2692,9 +2647,6 @@ func _update_kawaii_bar(pct: float) -> void:
 		kawaii_percent_label.text = str(int(round(clamped))) + "% !"
 
 
-# ==============================================================================
-# SISTEMA DE DIÁLOGOS CON DIVISIÓN ESTRICTA (CERO DESBORDAMIENTO) Y COLA DE ATRASADOS
-# ==============================================================================
 func _fits_in_dialogue_box(candidate: String, font: Font, font_size: int, max_width: float, max_height: float) -> bool:
 	if font == null:
 		return candidate.length() <= 85
@@ -2849,16 +2801,34 @@ func _make_speaker_style(bg_color: Color, accent_color: Color) -> StyleBoxFlat:
 	return style
 
 
+func _resolve_fair_scene_path() -> String:
+	var candidates: Array[String] = [
+		next_scene_path.strip_edges(),
+		"res://scenes/fairScenes.tscn",
+		"res://scenes/FairScenes.tscn",
+		"res://fairScenes.tscn",
+		"res://FairScenes.tscn"
+	]
+	for cand: String in candidates:
+		if not cand.is_empty() and ResourceLoader.exists(cand):
+			return cand
+	return ""
+
+
 func _finish_scene() -> void:
 	_hide_parallel_mind()
 	_set_enter_reminder_visible(false)
-	var target_scene: String = next_scene_path
-	if not ResourceLoader.exists(target_scene) and ResourceLoader.exists("res://fairScenes.tscn"):
-		target_scene = "res://fairScenes.tscn"
+	var target_scene: String = _resolve_fair_scene_path()
+	if target_scene.is_empty():
+		push_error("No se encontró la escena de la feria. Revisa next_scene_path en Level3.")
+		return
 
 	var save_manager: Node = get_node_or_null("/root/SaveManager")
-	if save_manager != null and ResourceLoader.exists(target_scene):
+	if save_manager != null and save_manager.has_method("guardar_progreso"):
 		save_manager.guardar_progreso(target_scene, "fairScenes")
 
-	if ResourceLoader.exists(target_scene):
+	var packed := ResourceLoader.load(target_scene) as PackedScene
+	if packed != null:
+		get_tree().change_scene_to_packed(packed)
+	else:
 		get_tree().change_scene_to_file(target_scene)

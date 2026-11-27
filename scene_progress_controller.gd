@@ -10,6 +10,8 @@ const STATE_KEYS: Array[String] = [
 	"current_index",
 	"dialogue_index",
 	"line_index",
+	"ronda_actual",
+	"step",
 	"chapter",
 	"score",
 	"hp",
@@ -91,17 +93,16 @@ func _restore_current_scene_state_if_needed() -> void:
 		return
 
 	var progress: Dictionary = progress_val as Dictionary
-	if progress.is_empty() or bool(progress.get("is_new_game", false)):
+	if progress.is_empty() or bool(progress.get("is_new_game", false)) or bool(progress.get("vacio", false)):
 		return
 
 	var saved_scene := str(progress.get("scene_path", progress.get("current_scene", "")))
-	if not saved_scene.is_empty() and not scene.scene_file_path.is_empty() and saved_scene != scene.scene_file_path:
+	if saved_scene.is_empty() or scene.scene_file_path.is_empty() or saved_scene != scene.scene_file_path:
 		return
 
 	var state_val = progress.get("state", {})
 	var state: Dictionary = state_val as Dictionary if state_val is Dictionary else {}
 	if state.is_empty():
-		# Si guardaron claves sueltas en progress, recuperarlas también
 		for k in STATE_KEYS:
 			if progress.has(k):
 				state[k] = progress[k]
@@ -123,7 +124,6 @@ func _restore_current_scene_state_if_needed() -> void:
 
 
 func _build_ui() -> void:
-	# 1. Ventana "¿Deseas guardar partida?"
 	_ask_panel = Panel.new()
 	_ask_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	_ask_panel.custom_minimum_size = Vector2(760, 360)
@@ -182,7 +182,6 @@ func _build_ui() -> void:
 	)
 	hbox.add_child(btn_cancel)
 
-	# 2. Selector de slot donde guardar
 	_slots_panel = Panel.new()
 	_slots_panel.set_anchors_and_offsets_preset(Control.PRESET_CENTER)
 	_slots_panel.custom_minimum_size = Vector2(880, 540)
@@ -232,7 +231,11 @@ func _refresh_save_slots() -> void:
 		c.queue_free()
 
 	var save_mgr := get_node_or_null("/root/SaveManager")
-	for slot_idx in range(1, 4):
+	var max_slots := 3
+	if save_mgr != null and save_mgr.has_method("get_max_slots"):
+		max_slots = int(save_mgr.call("get_max_slots"))
+
+	for slot_idx in range(1, max_slots + 1):
 		var btn := Button.new()
 		btn.custom_minimum_size = Vector2(0, 96)
 		btn.add_theme_font_size_override("font_size", 24)
@@ -260,6 +263,7 @@ func _refresh_save_slots() -> void:
 					"current_scene": _scene_to_save,
 					"stage_name": _scene_to_save.get_file().get_basename() if not _scene_to_save.is_empty() else "Partida",
 					"state": scene_state,
+					"extra_data": scene_state.duplicate(true),
 					"is_new_game": false
 				}
 				for k in scene_state.keys():

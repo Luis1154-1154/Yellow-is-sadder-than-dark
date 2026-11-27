@@ -9,12 +9,10 @@ const MIND_COLOR := Color("#ff5a5f")
 const ACCENT_COLOR := Color("#fff9f0")
 const GOLD_ACCENT := Color("#f5d08a")
 
-# Colores por personaje
 const JAMMY_COLOR := Color("#f5d08a")
 const LEON_COLOR := Color("#e5df88")
 const XCARLET_COLOR := Color("#5bc0eb")
 
-# Tamaño estándar y posiciones (3840x2160)
 const DIALOGUE_PANEL_SIZE := Vector2(1240.0, 230.0)
 const LEON_PANEL_POS := Vector2(1060.0, 230.0)
 const JAMMY_CENTER_POS := Vector2(1300.0, 960.0)
@@ -27,6 +25,9 @@ const ROCK_SALT_FONT = preload("res://fonts/RockSalt-Regular.ttf")
 const NORMAL_DIALOGUE_STREAM = preload("res://assets/sounds/Soft_pencil_tap_on_n_#1-1794378651940.mp3")
 const BREATHING_STREAM = preload("res://assets/sounds/breathing1.mp3")
 const HEARTBEAT_STREAM = preload("res://assets/sounds/Hbeating1.mp3")
+
+const SCENE15_TEX = preload("res://scenes/scene15.png")
+const SCENE16_TEX = preload("res://scenes/scene16.png")
 
 @export_file("*.tscn") var next_scene_path: String = "res://Level3.tscn"
 
@@ -41,7 +42,6 @@ var speaker_label: Label
 var continue_panel: PanelContainer
 var continue_label: Label
 
-# Recordatorio perpetuo de menú + modal de confirmación
 var perpetual_hint_panel: PanelContainer
 var perpetual_hint_label: Label
 var leave_confirm_overlay: ColorRect
@@ -77,8 +77,8 @@ func _ready() -> void:
 	_build_script()
 	_split_long_dialogues()
 	_aplicar_guardado_cargado()
-	_play_eye_open_fade()
 	_show_entry()
+	_play_eye_open_fade()
 
 
 func _obtener_slot_activo() -> int:
@@ -205,6 +205,7 @@ func _build_ui() -> void:
 	background.stretch_mode = TextureRect.STRETCH_KEEP_ASPECT_CENTERED
 	background.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	background.pivot_offset = BASE_SIZE / 2.0
+	background.texture = SCENE15_TEX
 	ui_root.add_child(background)
 
 	perpetual_hint_panel = PanelContainer.new()
@@ -464,8 +465,10 @@ func _make_hint_pill_style() -> StyleBoxFlat:
 
 
 func _play_eye_open_fade() -> void:
+	eye_open_overlay.visible = true
+	eye_open_overlay.modulate.a = 1.0
 	var fade_tween := create_tween()
-	fade_tween.tween_property(eye_open_overlay, "modulate:a", 0.0, 1.1)
+	fade_tween.tween_property(eye_open_overlay, "modulate:a", 0.0, 0.22)
 	fade_tween.finished.connect(func(): eye_open_overlay.visible = false)
 
 
@@ -633,6 +636,19 @@ func _apply_thought_markers(text: String, add_start: bool, add_end: bool) -> Str
 	return result
 
 
+func _resolve_scene_texture(img_name: String) -> Texture2D:
+	match img_name:
+		"scene15.png":
+			return SCENE15_TEX
+		"scene16.png":
+			return SCENE16_TEX
+		_:
+			var img_path := "res://scenes/" + img_name
+			if ResourceLoader.exists(img_path):
+				return load(img_path)
+			return null
+
+
 func _show_entry() -> void:
 	if entry_index >= entries.size():
 		_show_ending()
@@ -646,9 +662,9 @@ func _show_entry() -> void:
 
 	black_background.visible = false
 	background.modulate = Color.WHITE
-	var img_path := "res://scenes/" + str(current_entry.image)
-	if ResourceLoader.exists(img_path):
-		background.texture = load(img_path)
+	var tex := _resolve_scene_texture(str(current_entry.image))
+	if tex != null:
+		background.texture = tex
 
 	_update_ambience()
 	_style_dialogue()
